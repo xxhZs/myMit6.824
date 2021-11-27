@@ -1,5 +1,13 @@
 package main
 
+import (
+	"6.824lab/mr"
+	"fmt"
+	"log"
+	"os"
+	"plugin"
+)
+
 //
 // start a worker process, which is implemented
 // in ../mr/worker.go. typically there will be
@@ -9,12 +17,6 @@ package main
 //
 // Please do not change this file.
 //
-
-import "6.824lab/mr"
-import "plugin"
-import "os"
-import "fmt"
-import "log"
 
 func main() {
 	if len(os.Args) != 2 {

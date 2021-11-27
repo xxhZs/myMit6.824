@@ -1,15 +1,17 @@
 package main
 
+import (
+	"6.824lab/mr"
+	"strconv"
+	"strings"
+	"unicode"
+)
+
 //
 // a word-count application "plugin" for MapReduce.
 //
 // go build -buildmode=plugin wc.go
 //
-
-import "6.824lab/mr"
-import "unicode"
-import "strings"
-import "strconv"
 
 //
 // The map function is called once for each file of input. The first

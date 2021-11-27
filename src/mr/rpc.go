@@ -23,7 +23,9 @@ type ExampleReply struct {
 }
 
 // Add your RPC definitions here.
-
+type WorkerReply struct {
+	Job *Job
+}
 
 // Cook up a unique-ish UNIX-domain socket name
 // in /var/tmp, for the master.
