@@ -23,6 +23,7 @@ type Job struct {
 	JobId       int
 	JobFileName string
 	ReduceId    int
+	ReduceNum   int
 }
 
 type Master struct {
@@ -57,13 +58,14 @@ func getJobId() (a int) {
 func getReduceId() (a int) {
 	return 0
 }
-func (m *Master) MasterFindMap(filename []string) {
+func (m *Master) MasterFindMap(filename []string, reduceNum int) {
 	for _, v := range filename {
 		job := Job{
 			JobType:     Map,
 			JobFileName: v,
 			ReduceId:    getReduceId(),
 			JobId:       getJobId(),
+			ReduceNum:   reduceNum,
 		}
 		m.JobChannelMap <- &job
 	}
@@ -107,7 +109,7 @@ func MakeMaster(files []string, nReduce int) *Master {
 		JobChannelMap:    make(chan *Job, len(files)),
 		JobChannelReduce: make(chan *Job, nReduce),
 	}
-	m.MasterFindMap(files)
+	m.MasterFindMap(files, nReduce)
 	m.server()
 
 	// Your code here.

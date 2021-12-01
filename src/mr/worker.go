@@ -1,6 +1,12 @@
 package mr
 
-import "fmt"
+import (
+	"encoding/json"
+	"fmt"
+	"io/ioutil"
+	"os"
+	"strconv"
+)
 import "log"
 import "net/rpc"
 import "hash/fnv"
@@ -12,6 +18,13 @@ type KeyValue struct {
 	Key   string
 	Value string
 }
+
+type ByKey []KeyValue
+
+// for sorting by key.
+func (a ByKey) Len() int           { return len(a) }
+func (a ByKey) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
+func (a ByKey) Less(i, j int) bool { return a[i].Key < a[j].Key }
 
 //
 // use ihash(key) % NReduce to choose the reduce
@@ -33,16 +46,63 @@ func Worker(mapf func(string, string) []KeyValue,
 
 	// uncomment to send the Example RPC to the master.
 	//CallExample()
-	CallMaster()
+	resultMap := [][]KeyValue{}
+	job := CallMaster()
+	if job.JobType == Map {
+		resultMap = MakeMap(job, mapf)
+	}
+	oname := "mr-out-" + strconv.Itoa(job.JobId) + "-" + strconv.Itoa(job.ReduceId)
+	ToJosn(resultMap, oname)
 
 }
 
-func CallMaster() {
+//通过用户名和数组创建json文件
+func ToJosn(resultMap [][]KeyValue, fileName string) {
+	file, err := os.Create(fileName)
+	if err != nil {
+		log.Fatalf("cannot open %v err", fileName)
+	}
+	defer file.Close()
+	encoder := json.NewEncoder(file)
+	err = encoder.Encode(resultMap)
+	if err != nil {
+		fmt.Println("Encoder failed", err.Error())
+	}
+}
+
+//使用该方法和master进行通信，获取文件
+func CallMaster() Job {
 	reply := Job{}
 	args := ExampleArgs{}
 	args.X = 1
 	call("Master.FromWorker", &args, &reply)
-	fmt.Printf(reply.JobFileName)
+	return reply
+}
+
+// map的使用策略
+func MakeMap(job Job, mapf func(string, string) []KeyValue) [][]KeyValue {
+	file, err := os.Open(job.JobFileName)
+	if err != nil {
+		log.Fatalf("cannot open %v err", job.JobFileName)
+	}
+	content, err := ioutil.ReadAll(file)
+	if err != nil {
+		log.Fatalf("cannot read %v err", job.JobFileName)
+	}
+	file.Close()
+	kva := mapf(job.JobFileName, string(content))
+	rn := job.ReduceNum
+	HashKv := make([][]KeyValue, rn)
+	for _, kva1 := range kva {
+		HashKv[ihash(kva1.Key)] = append(HashKv[ihash(kva1.Key)], kva1)
+	}
+	return HashKv
+}
+
+func Ihash(key string) int {
+	h := fnv.New32a()
+	h.Write([]byte(key))
+	return int(h.Sum32() & 0x7fffffff)
 }
 
 //
