@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io/ioutil"
 	"os"
+	"sort"
 	"strconv"
 )
 import "log"
@@ -46,42 +47,110 @@ func Worker(mapf func(string, string) []KeyValue,
 
 	// uncomment to send the Example RPC to the master.
 	//CallExample()
-	resultMap := [][]KeyValue{}
-	job := CallMaster()
-	if job.JobType == Map {
-		resultMap = MakeMap(job, mapf)
+
+	alive := true
+	for alive {
+
+		job := CallMaster()
+		//if job == nil
+		switch job.JobType {
+		case Map:
+			doMap(job, mapf)
+			fmt.Println("domap", job)
+			CallMasterEnd(job)
+		case Reduce:
+			doReduce(job, reducef)
+			fmt.Println("doreduce", job)
+			CallMasterEnd(job)
+		case KillJob:
+			fmt.Println("killjob", job)
+			alive = false
+		}
 	}
-	oname := "mr-out-" + strconv.Itoa(job.JobId) + "-" + strconv.Itoa(job.ReduceId)
-	ToJosn(resultMap, oname)
 
 }
 
-//通过用户名和数组创建json文件
-func ToJosn(resultMap [][]KeyValue, fileName string) {
-	file, err := os.Create(fileName)
-	if err != nil {
-		log.Fatalf("cannot open %v err", fileName)
+//向master发送结束信号
+func CallMasterEnd(job Job) {
+	reply := ExampleReply{}
+	args := job
+	call("Master.JobDone", &args, &reply)
+}
+func doMap(job Job, mapf func(string, string) []KeyValue) {
+	resultMap := MakeMap(job, mapf)
+	for i := 0; i < job.ReduceNum; i++ {
+		oname := "mr-out-" + strconv.Itoa(job.JobId) + "-" + strconv.Itoa(i)
+		file, err := os.Create(oname)
+		defer file.Close()
+		encoder := json.NewEncoder(file)
+		for _, kv := range resultMap[i] {
+			err = encoder.Encode(kv)
+		}
+		if err != nil {
+			fmt.Println("Encoder failed", err.Error())
+		}
 	}
-	defer file.Close()
-	encoder := json.NewEncoder(file)
-	err = encoder.Encode(resultMap)
-	if err != nil {
-		fmt.Println("Encoder failed", err.Error())
+}
+func doReduce(job Job, reducef func(string, []string) string) {
+	jobId := job.JobId
+	jobName := readFileByJson(job.JobFileName)
+
+	sort.Sort(ByKey(jobName))
+	oname := "mr-out-" + strconv.Itoa(jobId)
+	ofile, _ := os.Create(oname)
+	//
+	// call Reduce on each distinct key in intermediate[],
+	// and print the result to mr-out-0.
+	//
+	i := 0
+	for i < len(jobName) {
+		j := i + 1
+		for j < len(jobName) && jobName[j].Key == jobName[i].Key {
+			j++
+		}
+		values := []string{}
+		for k := i; k < j; k++ {
+			values = append(values, jobName[k].Value)
+		}
+		output := reducef(jobName[i].Key, values)
+
+		// this is the correct format for each line of Reduce output.
+		fmt.Fprintf(ofile, "%v %v\n", jobName[i].Key, output)
+
+		i = j
 	}
+
+	ofile.Close()
+
+}
+func readFileByJson(jobFile []string) []KeyValue {
+	kva := []KeyValue{}
+	for _, job := range jobFile {
+		jobfile, _ := os.Open(job)
+		json := json.NewDecoder(jobfile)
+		for {
+			var kv KeyValue
+			if err := json.Decode(&kv); err != nil {
+				break
+			}
+			kva = append(kva, kv)
+		}
+		jobfile.Close()
+	}
+	return kva
 }
 
 //使用该方法和master进行通信，获取文件
 func CallMaster() Job {
 	reply := Job{}
 	args := ExampleArgs{}
-	args.X = 1
 	call("Master.FromWorker", &args, &reply)
 	return reply
 }
 
 // map的使用策略
 func MakeMap(job Job, mapf func(string, string) []KeyValue) [][]KeyValue {
-	file, err := os.Open(job.JobFileName)
+	file, err := os.Open(job.JobFileName[0])
 	if err != nil {
 		log.Fatalf("cannot open %v err", job.JobFileName)
 	}
@@ -90,19 +159,13 @@ func MakeMap(job Job, mapf func(string, string) []KeyValue) [][]KeyValue {
 		log.Fatalf("cannot read %v err", job.JobFileName)
 	}
 	file.Close()
-	kva := mapf(job.JobFileName, string(content))
+	kva := mapf(job.JobFileName[0], string(content))
 	rn := job.ReduceNum
 	HashKv := make([][]KeyValue, rn)
 	for _, kva1 := range kva {
-		HashKv[ihash(kva1.Key)] = append(HashKv[ihash(kva1.Key)], kva1)
+		HashKv[ihash(kva1.Key)%rn] = append(HashKv[ihash(kva1.Key)%rn], kva1)
 	}
 	return HashKv
-}
-
-func Ihash(key string) int {
-	h := fnv.New32a()
-	h.Write([]byte(key))
-	return int(h.Sum32() & 0x7fffffff)
 }
 
 //

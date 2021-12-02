@@ -189,7 +189,7 @@ func (m *Master) MasterFindMap(filename []string, reduceNum int) {
 		//将job元信息放入map
 		m.putMap(&jobMetaInfo)
 		//将job放入队列中
-		println("将job加入队列：", job)
+		fmt.Println("将job加入队列：", job)
 		m.JobChannelMap <- &job
 	}
 }
@@ -209,8 +209,8 @@ func (m *Master) MasterFindReduce() {
 		//将job元信息放入map
 		m.putMap(&jobMetaInfo)
 		//将job放入队列中
-		println("将job加入队列：", job)
-		m.JobChannelMap <- &job
+		fmt.Println("将job加入队列：", job)
+		m.JobChannelReduce <- &job
 	}
 }
 func (m *Master) putMap(jobMetaInfo *JobMetaInfo) bool {
@@ -253,9 +253,10 @@ func (m *Master) nextStatus() {
 * 通过reduceID来找到相对应的文件名
  */
 func getReduceFileName(reduceId int, path string) []string {
-	rd, err := ioutil.ReadDir(path)
+	path1, _ := os.Getwd()
+	rd, err := ioutil.ReadDir(path1)
 	if err != nil {
-		fmt.Println("错误：getReduceFileName打开目录错误", err.Error())
+		fmt.Println("错误：getReduceFileName打开目录错误", path)
 		return nil
 	}
 	var res []string
@@ -263,7 +264,7 @@ func getReduceFileName(reduceId int, path string) []string {
 		if !fi.IsDir() {
 			fiName := fi.Name()
 			if strings.HasPrefix(fiName, "mr-out-") && strings.HasSuffix(fiName, strconv.Itoa(reduceId)) {
-				fullName := path + fiName
+				fullName := fiName
 				res = append(res, fullName)
 			}
 		}
