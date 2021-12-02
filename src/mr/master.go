@@ -86,11 +86,12 @@ func (m *Master) FromWorker(args *ExampleArgs, reply *Job) error {
 		if len(m.JobChannelMap) > 0 {
 			*reply = *<-m.JobChannelMap
 			if !m.JobMetaMap.sendMetaJob(reply.JobId) {
-				println("找个job开始运行了:", reply)
+				fmt.Println("找个job map开始运行了:", reply)
 			}
 		} else {
 			//说明任务全部完成了，要更新状态了
 			if m.JobMetaMap.checkJobNum() {
+				fmt.Println("map任务完成，切换任务：", reply)
 				m.nextStatus()
 			}
 		}
@@ -99,11 +100,12 @@ func (m *Master) FromWorker(args *ExampleArgs, reply *Job) error {
 		if len(m.JobChannelReduce) > 0 {
 			*reply = *<-m.JobChannelReduce
 			if !m.JobMetaMap.sendMetaJob(reply.JobId) {
-				println("找个job开始运行了:", reply)
+				println("找个job reduce开始运行了:", reply)
 			}
 		} else {
 			//说明任务全部完成了，要更新状态了
 			if m.JobMetaMap.checkJobNum() {
+				fmt.Println("reduce任务完成，切换任务：", reply)
 				m.nextStatus()
 			}
 		}
@@ -189,7 +191,7 @@ func (m *Master) MasterFindMap(filename []string, reduceNum int) {
 		//将job元信息放入map
 		m.putMap(&jobMetaInfo)
 		//将job放入队列中
-		fmt.Println("将job加入队列：", job)
+		fmt.Println("将map job加入队列：", job)
 		m.JobChannelMap <- &job
 	}
 }
@@ -209,17 +211,17 @@ func (m *Master) MasterFindReduce() {
 		//将job元信息放入map
 		m.putMap(&jobMetaInfo)
 		//将job放入队列中
-		fmt.Println("将job加入队列：", job)
+		fmt.Println("将reduce job加入队列：", job)
 		m.JobChannelReduce <- &job
 	}
 }
 func (m *Master) putMap(jobMetaInfo *JobMetaInfo) bool {
 	jobId := jobMetaInfo.JobPtr.JobId
 	if m.JobMetaMap.MetaMap[jobId] == nil {
-		println("将job元信息", jobId, "加入队列")
+		fmt.Println("将job元信息", jobId, "加入队列")
 		m.JobMetaMap.MetaMap[jobId] = jobMetaInfo
 	} else {
-		println("这个job元信息已经存在：", jobId)
+		fmt.Println("这个job元信息已经存在：", jobId)
 		return false
 	}
 	return true
@@ -229,7 +231,7 @@ func (m *Master) putMap(jobMetaInfo *JobMetaInfo) bool {
 func (j *JobMetaMap) sendMetaJob(jobId int) bool {
 	jobMetaInfo, err := j.MetaMap[jobId]
 	if !err || jobMetaInfo.status != Start {
-		println("这个job已经不在start", jobId)
+		fmt.Println("这个job已经不在start", jobId)
 		return false
 	}
 	jobMetaInfo.startTime = time.Now()
@@ -245,7 +247,7 @@ func (m *Master) nextStatus() {
 	} else if m.MasterStatus == ReducePhase {
 		m.MasterStatus = Waiting
 	} else {
-		println("master状态不对")
+		fmt.Println("master状态不对")
 	}
 }
 
@@ -256,7 +258,7 @@ func getReduceFileName(reduceId int, path string) []string {
 	path1, _ := os.Getwd()
 	rd, err := ioutil.ReadDir(path1)
 	if err != nil {
-		fmt.Println("错误：getReduceFileName打开目录错误", path)
+		println("错误：getReduceFileName打开目录错误", path)
 		return nil
 	}
 	var res []string
@@ -301,7 +303,7 @@ func (m *Master) JobDone(args *Job, reply *ExampleReply) error {
 		job, OK := m.JobMetaMap.MetaMap[args.JobId]
 		if OK && job.status == Using {
 			job.status = End
-			println("job map已经完成：", job)
+			fmt.Println("job map已经完成：", job)
 		} else {
 			println("错误：job map已经完成或者没有开始", job)
 		}
@@ -310,7 +312,7 @@ func (m *Master) JobDone(args *Job, reply *ExampleReply) error {
 		job, OK := m.JobMetaMap.MetaMap[args.JobId]
 		if OK && job.status == Using {
 			job.status = End
-			println("job reduce已经完成：", job)
+			fmt.Println("job reduce已经完成：", job)
 		} else {
 			println("错误：job reduce已经完成或者没有开始", job)
 		}
