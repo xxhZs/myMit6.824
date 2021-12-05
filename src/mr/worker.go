@@ -1,12 +1,14 @@
 package mr
 
 import (
+	"6.824lab/raft"
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
 	"os"
 	"sort"
 	"strconv"
+	"time"
 )
 import "log"
 import "net/rpc"
@@ -50,22 +52,28 @@ func Worker(mapf func(string, string) []KeyValue,
 
 	alive := true
 	for alive {
-
 		job := CallMaster()
 		//if job == nil
 		switch job.JobType {
 		case Map:
 			doMap(job, mapf)
-			fmt.Println("domap", job)
+			raft.DPrintf("domap", job)
 			CallMasterEnd(job)
+			break
 		case Reduce:
 			doReduce(job, reducef)
-			fmt.Println("doreduce", job)
+			raft.DPrintf("doreduce", job)
 			CallMasterEnd(job)
+			break
 		case KillJob:
-			fmt.Println("killjob", job)
+			raft.DPrintf("killjob", job)
 			alive = false
+			break
+		default:
+			time.Sleep(time.Second)
+			continue
 		}
+		time.Sleep(time.Second)
 	}
 
 }
@@ -79,7 +87,7 @@ func CallMasterEnd(job Job) {
 func doMap(job Job, mapf func(string, string) []KeyValue) {
 	resultMap := MakeMap(job, mapf)
 	for i := 0; i < job.ReduceNum; i++ {
-		oname := "mr-out-" + strconv.Itoa(job.JobId) + "-" + strconv.Itoa(i)
+		oname := "mr1-out-" + strconv.Itoa(job.JobId) + "-" + strconv.Itoa(i)
 		file, err := os.Create(oname)
 		defer file.Close()
 		encoder := json.NewEncoder(file)
@@ -87,7 +95,7 @@ func doMap(job Job, mapf func(string, string) []KeyValue) {
 			err = encoder.Encode(kv)
 		}
 		if err != nil {
-			fmt.Println("Encoder failed", err.Error())
+			raft.DPrintf("Encoder failed", err.Error())
 		}
 	}
 }
@@ -150,6 +158,7 @@ func CallMaster() Job {
 
 // map的使用策略
 func MakeMap(job Job, mapf func(string, string) []KeyValue) [][]KeyValue {
+	raft.DPrintf("打日誌看一下错误的job", job)
 	file, err := os.Open(job.JobFileName[0])
 	if err != nil {
 		log.Fatalf("cannot open %v err", job.JobFileName)

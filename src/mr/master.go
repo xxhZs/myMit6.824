@@ -1,7 +1,7 @@
 package mr
 
 import (
-	"fmt"
+	"6.824lab/raft"
 	"io/ioutil"
 	"log"
 	"os"
@@ -13,15 +13,17 @@ import (
 import "net"
 import "net/rpc"
 import "net/http"
+import _ "6.824lab/kvraft"
 
 var mu sync.Mutex
 
 type JobType int
 
 const (
-	Map JobType = iota
+	None JobType = iota
 	Reduce
 	KillJob
+	Map
 )
 
 type Status int
@@ -80,19 +82,25 @@ func (m *Master) Example(args *ExampleArgs, reply *ExampleReply) error {
 	return nil
 }
 func (m *Master) FromWorker(args *ExampleArgs, reply *Job) error {
-	println("worker来领任务了")
+	mu.Lock()
+	defer mu.Unlock()
+	raft.DPrintf("worker来领任务了")
 	switch m.MasterStatus {
 	case MapPhase:
 		if len(m.JobChannelMap) > 0 {
 			*reply = *<-m.JobChannelMap
 			if !m.JobMetaMap.sendMetaJob(reply.JobId) {
-				fmt.Println("找个job map开始运行了:", reply)
+				raft.DPrintf("找个job map开始运行了:", reply)
 			}
 		} else {
 			//说明任务全部完成了，要更新状态了
-			if m.JobMetaMap.checkJobNum() {
-				fmt.Println("map任务完成，切换任务：", reply)
+			a, _ := m.JobMetaMap.checkJobNum()
+			if a {
+				raft.DPrintf("map任务完成，切换任务：", reply)
 				m.nextStatus()
+				*reply = Job{
+					JobType: None,
+				}
 			}
 		}
 		break
@@ -100,17 +108,22 @@ func (m *Master) FromWorker(args *ExampleArgs, reply *Job) error {
 		if len(m.JobChannelReduce) > 0 {
 			*reply = *<-m.JobChannelReduce
 			if !m.JobMetaMap.sendMetaJob(reply.JobId) {
-				println("找个job reduce开始运行了:", reply)
+				raft.DPrintf("找个job reduce开始运行了:", reply)
 			}
 		} else {
 			//说明任务全部完成了，要更新状态了
-			if m.JobMetaMap.checkJobNum() {
-				fmt.Println("reduce任务完成，切换任务：", reply)
+			_, a := m.JobMetaMap.checkJobNum()
+			if a {
+				raft.DPrintf("reduce任务完成，切换任务：", reply)
 				m.nextStatus()
+				*reply = Job{
+					JobType: None,
+				}
 			}
 		}
 		break
 	default:
+		raft.DPrintf("没有任务给worker")
 		reply.JobType = KillJob
 	}
 	return nil
@@ -146,7 +159,7 @@ func (m *Master) Done() bool {
 	ret := false
 
 	// Your code here.
-
+	ret = m.MasterStatus == Waiting
 	return ret
 }
 
@@ -170,6 +183,7 @@ func MakeMaster(files []string, nReduce int) *Master {
 	m.MasterFindMap(files, nReduce)
 	m.server()
 
+	go m.isTimeOut()
 	// Your code here.
 
 	return &m
@@ -191,7 +205,7 @@ func (m *Master) MasterFindMap(filename []string, reduceNum int) {
 		//将job元信息放入map
 		m.putMap(&jobMetaInfo)
 		//将job放入队列中
-		fmt.Println("将map job加入队列：", job)
+		raft.DPrintf("将map job加入队列：", job)
 		m.JobChannelMap <- &job
 	}
 }
@@ -211,17 +225,17 @@ func (m *Master) MasterFindReduce() {
 		//将job元信息放入map
 		m.putMap(&jobMetaInfo)
 		//将job放入队列中
-		fmt.Println("将reduce job加入队列：", job)
+		raft.DPrintf("将reduce job加入队列：", job)
 		m.JobChannelReduce <- &job
 	}
 }
 func (m *Master) putMap(jobMetaInfo *JobMetaInfo) bool {
 	jobId := jobMetaInfo.JobPtr.JobId
 	if m.JobMetaMap.MetaMap[jobId] == nil {
-		fmt.Println("将job元信息", jobId, "加入队列")
+		raft.DPrintf("将job元信息", jobId, "加入队列")
 		m.JobMetaMap.MetaMap[jobId] = jobMetaInfo
 	} else {
-		fmt.Println("这个job元信息已经存在：", jobId)
+		raft.DPrintf("这个job元信息已经存在：", jobId)
 		return false
 	}
 	return true
@@ -231,7 +245,7 @@ func (m *Master) putMap(jobMetaInfo *JobMetaInfo) bool {
 func (j *JobMetaMap) sendMetaJob(jobId int) bool {
 	jobMetaInfo, err := j.MetaMap[jobId]
 	if !err || jobMetaInfo.status != Start {
-		fmt.Println("这个job已经不在start", jobId)
+		raft.DPrintf("这个job已经不在start", jobId)
 		return false
 	}
 	jobMetaInfo.startTime = time.Now()
@@ -247,7 +261,7 @@ func (m *Master) nextStatus() {
 	} else if m.MasterStatus == ReducePhase {
 		m.MasterStatus = Waiting
 	} else {
-		fmt.Println("master状态不对")
+		raft.DPrintf("master状态不对")
 	}
 }
 
@@ -258,14 +272,14 @@ func getReduceFileName(reduceId int, path string) []string {
 	path1, _ := os.Getwd()
 	rd, err := ioutil.ReadDir(path1)
 	if err != nil {
-		println("错误：getReduceFileName打开目录错误", path)
+		raft.DPrintf("错误：getReduceFileName打开目录错误", path)
 		return nil
 	}
 	var res []string
 	for _, fi := range rd {
 		if !fi.IsDir() {
 			fiName := fi.Name()
-			if strings.HasPrefix(fiName, "mr-out-") && strings.HasSuffix(fiName, strconv.Itoa(reduceId)) {
+			if strings.HasPrefix(fiName, "mr1-out-") && strings.HasSuffix(fiName, strconv.Itoa(reduceId)) {
 				fullName := fiName
 				res = append(res, fullName)
 			}
@@ -273,7 +287,7 @@ func getReduceFileName(reduceId int, path string) []string {
 	}
 	return res
 }
-func (j JobMetaMap) checkJobNum() bool {
+func (j JobMetaMap) checkJobNum() (bool, bool) {
 	mapNoDo := 0
 	mapDo := 0
 	reduceNoDo := 0
@@ -293,32 +307,34 @@ func (j JobMetaMap) checkJobNum() bool {
 			}
 		}
 	}
-	return (mapDo > 0 && mapNoDo == 0) || (reduceDo > 0 && reduceNoDo == 0)
+	return (mapDo > 0 && mapNoDo == 0), (reduceDo > 0 && reduceNoDo == 0)
 }
 
 // 任务完成的方法
 func (m *Master) JobDone(args *Job, reply *ExampleReply) error {
+	mu.Lock()
+	defer mu.Unlock()
 	switch args.JobType {
 	case Map:
 		job, OK := m.JobMetaMap.MetaMap[args.JobId]
 		if OK && job.status == Using {
 			job.status = End
-			fmt.Println("job map已经完成：", job)
+			raft.DPrintf("job map已经完成：", job.JobPtr.JobFileName)
 		} else {
-			println("错误：job map已经完成或者没有开始", job)
+			raft.DPrintf("错误：job map已经完成或者没有开始", job.JobPtr.JobFileName)
 		}
 		break
 	case Reduce:
 		job, OK := m.JobMetaMap.MetaMap[args.JobId]
 		if OK && job.status == Using {
 			job.status = End
-			fmt.Println("job reduce已经完成：", job)
+			raft.DPrintf("job reduce已经完成：", job)
 		} else {
-			println("错误：job reduce已经完成或者没有开始", job)
+			raft.DPrintf("错误：job reduce已经完成或者没有开始", job)
 		}
 		break
 	default:
-		println("错误： job错误")
+		raft.DPrintf("错误： job错误")
 	}
 	return nil
 }
@@ -326,17 +342,19 @@ func (m *Master) JobDone(args *Job, reply *ExampleReply) error {
 //超时管理的方法
 func (m *Master) isTimeOut() {
 	for {
-		time.Sleep(time.Second)
+		time.Sleep(time.Second * 2)
+		mu.Lock()
 		if m.MasterStatus == Waiting {
+			mu.Unlock()
 			break
 		}
 
 		for _, job := range m.JobMetaMap.MetaMap {
-			if job.status == Start {
-				fmt.Println("job依旧在运行", job, time.Now().Sub(job.startTime))
+			if job.status == Using {
+				raft.DPrintf("job依旧在运行", job, time.Now().Sub(job.startTime))
 			}
-			if job.status == Start && time.Now().Sub(job.startTime) > time.Second*2 {
-				fmt.Println("job超时了", job, time.Now().Sub(job.startTime))
+			if job.status == Using && time.Now().Sub(job.startTime) > time.Second*5 {
+				raft.DPrintf("job超时了", job, time.Now().Sub(job.startTime))
 				if job.JobPtr.JobType == Map {
 					m.JobChannelMap <- job.JobPtr
 					job.status = Start
@@ -347,5 +365,6 @@ func (m *Master) isTimeOut() {
 			}
 
 		}
+		mu.Unlock()
 	}
 }
