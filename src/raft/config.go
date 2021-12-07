@@ -57,6 +57,7 @@ type config struct {
 
 var ncpu_once sync.Once
 
+// 启动n个raft
 func make_config(t *testing.T, n int, unreliable bool) *config {
 	ncpu_once.Do(func() {
 		if runtime.NumCPU() < 2 {
