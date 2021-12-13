@@ -71,16 +71,20 @@ func TestReElection2A(t *testing.T) {
 	// if there's no quorum, no leader should
 	// be elected.
 	cfg.disconnect(leader2)
+	//fmt.Println("停止",leader2)
 	cfg.disconnect((leader2 + 1) % servers)
+	//fmt.Println("停止",(leader2 + 1) % servers)
 	time.Sleep(2 * RaftElectionTimeout)
 	cfg.checkNoLeader()
 
 	// if a quorum arises, it should elect a leader.
 	cfg.connect((leader2 + 1) % servers)
+	//fmt.Println("启动",(leader2 + 1) % servers)
 	cfg.checkOneLeader()
 
 	// re-join of last node shouldn't prevent leader from existing.
 	cfg.connect(leader2)
+	//fmt.Println("启动",leader2)
 	cfg.checkOneLeader()
 
 	cfg.end()
@@ -156,6 +160,7 @@ func TestFailAgree2B(t *testing.T) {
 	// disconnect one follower from the network.
 	leader := cfg.checkOneLeader()
 	cfg.disconnect((leader + 1) % servers)
+	fmt.Println("断开", (leader+1)%servers)
 
 	// the leader and remaining follower should be
 	// able to agree despite the disconnected follower.
@@ -166,6 +171,7 @@ func TestFailAgree2B(t *testing.T) {
 	cfg.one(105, servers-1, false)
 
 	// re-connect
+	fmt.Println("回归", (leader+1)%servers)
 	cfg.connect((leader + 1) % servers)
 
 	// the full set of servers should preserve
@@ -190,8 +196,11 @@ func TestFailNoAgree2B(t *testing.T) {
 	// 3 of 5 followers disconnect
 	leader := cfg.checkOneLeader()
 	cfg.disconnect((leader + 1) % servers)
+	fmt.Println("断开", (leader+1)%servers)
 	cfg.disconnect((leader + 2) % servers)
+	fmt.Println("断开", (leader+2)%servers)
 	cfg.disconnect((leader + 3) % servers)
+	fmt.Println("断开", (leader+3)%servers)
 
 	index, _, ok := cfg.rafts[leader].Start(20)
 	if ok != true {
@@ -210,8 +219,11 @@ func TestFailNoAgree2B(t *testing.T) {
 
 	// repair
 	cfg.connect((leader + 1) % servers)
+	fmt.Println("恢复", (leader+1)%servers)
 	cfg.connect((leader + 2) % servers)
+	fmt.Println("恢复", (leader+2)%servers)
 	cfg.connect((leader + 3) % servers)
+	fmt.Println("恢复", (leader+3)%servers)
 
 	// the disconnected majority may have chosen a leader from
 	// among their own ranks, forgetting index 2.
@@ -382,6 +394,7 @@ func TestBackup2B(t *testing.T) {
 	cfg.disconnect((leader1 + 2) % servers)
 	cfg.disconnect((leader1 + 3) % servers)
 	cfg.disconnect((leader1 + 4) % servers)
+	fmt.Println("断开", (leader1+2)%servers, (leader1+3)%servers, (leader1+4)%servers)
 
 	// submit lots of commands that won't commit
 	for i := 0; i < 50; i++ {
