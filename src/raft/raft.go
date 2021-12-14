@@ -18,6 +18,8 @@ package raft
 //
 
 import (
+	"6.824lab/labgob"
+	"bytes"
 	"math/rand"
 	"sync"
 	"time"
@@ -108,6 +110,7 @@ func (rf *Raft) GetState() (int, bool) {
 // see paper's Figure 2 for a description of what should be persistent.
 //
 func (rf *Raft) persist() {
+	rf.DPrintf("序列化 %v,%v,%v", rf.currentTetm, rf.votedFor, rf.log)
 	// Your code here (2C).
 	// Example:
 	// w := new(bytes.Buffer)
@@ -116,12 +119,20 @@ func (rf *Raft) persist() {
 	// e.Encode(rf.yyy)
 	// data := w.Bytes()
 	// rf.persister.SaveRaftState(data)
+	w := new(bytes.Buffer)
+	e := labgob.NewEncoder(w)
+	e.Encode(rf.currentTetm)
+	e.Encode(rf.votedFor)
+	e.Encode(rf.log)
+	data := w.Bytes()
+	rf.persister.SaveRaftState(data)
 }
 
 //
 // restore previously persisted state.
 //
 func (rf *Raft) readPersist(data []byte) {
+	rf.DPrintf("反序列化")
 	if data == nil || len(data) < 1 { // bootstrap without any state?
 		return
 	}
@@ -138,6 +149,16 @@ func (rf *Raft) readPersist(data []byte) {
 	//   rf.xxx = xxx
 	//   rf.yyy = yyy
 	// }
+
+	// Your code here (2C).
+	// Example:
+	r := bytes.NewBuffer(data)
+	d := labgob.NewDecoder(r)
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	d.Decode(&rf.currentTetm)
+	d.Decode(&rf.votedFor)
+	d.Decode(&rf.log)
 }
 
 //
@@ -183,6 +204,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (2A, 2B).
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
+	defer rf.persist()
 	voteGranted := 1
 	//日志判断
 	if len(rf.log) > 0 {
@@ -284,6 +306,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	isLeader := false
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
+	defer rf.persist()
 	// Your code here (2B).
 	rf.DPrintf("来进行同步日志 %v", command)
 	if rf.State != "Leader" {
@@ -293,11 +316,11 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	nlog := LogEntry{Command: command, Term: rf.currentTetm}
 	rf.DPrintf("来进行同步日志 %v", nlog)
 	isLeader = rf.State == "Leader"
-	rf.log = append(rf.log, nlog)
-
+	logcopy := append(rf.log, nlog)
+	rf.log = make([]LogEntry, len(logcopy))
+	copy(rf.log, logcopy)
 	index = len(rf.log)
 	term = rf.currentTetm
-
 	return index, term, isLeader
 }
 
@@ -314,6 +337,8 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 //
 func (rf *Raft) Kill() {
 	atomic.StoreInt32(&rf.dead, 1)
+	rf.heaterTimer.Stop()
+	rf.electionTimer.Stop()
 	// Your code here, if desired.
 }
 
@@ -376,6 +401,7 @@ func (rf *Raft) getTimeOut() time.Duration {
 	return timerD
 }
 func (rf *Raft) getElection() {
+	defer rf.persist()
 	//rf.mu.Lock()
 	//defer rf.mu.Unlock()
 	rf.DPrintf("超时了，进行选举机制")
@@ -425,6 +451,7 @@ func (rf *Raft) getElection() {
 func (rf *Raft) setReplyVote(reply RequestVoteReply) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
+	defer rf.persist()
 	rf.DPrintf("获取选举信息")
 	// 条件满足
 	if rf.State == "Candidate" && reply.VoteGranted == 1 {
@@ -572,6 +599,7 @@ func (rf *Raft) handleAppendEntries(serverNum int, reply RequestVoteReply) bool 
 	//获得返回值，发送成功和发送失败
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
+	defer rf.persist()
 	if rf.State != "Leader" {
 		rf.DPrintf("这个raft已经不是leader %v", rf.State)
 		return true
@@ -649,6 +677,7 @@ func (rf *Raft) GetAppendEntries(args *AppendEntries, reply *RequestVoteReply) {
 	//rf.DPrintf("收到心跳 %v",args.CandidateID)
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
+	defer rf.persist()
 	reply.Term = rf.currentTetm
 	rf.DPrintf("收到日志信息")
 	if rf.currentTetm > args.Term {
@@ -679,8 +708,10 @@ func (rf *Raft) GetAppendEntries(args *AppendEntries, reply *RequestVoteReply) {
 		}
 	} else {
 		//同步日志
-		rf.log = rf.log[:args.PrevLogIndex+1]
-		rf.log = append(rf.log, args.Entrys...)
+		logCopy := rf.log[:args.PrevLogIndex+1]
+		logCopy = append(logCopy, args.Entrys...)
+		rf.log = make([]LogEntry, len(logCopy))
+		copy(rf.log, logCopy)
 		//rf.commitIndex = args.LeaderCommit
 		//go rf.CommitLog()
 		reply.VoteGranted = 1
