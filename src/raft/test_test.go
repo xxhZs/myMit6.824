@@ -160,7 +160,7 @@ func TestFailAgree2B(t *testing.T) {
 	// disconnect one follower from the network.
 	leader := cfg.checkOneLeader()
 	cfg.disconnect((leader + 1) % servers)
-	fmt.Println("断开", (leader+1)%servers)
+	//fmt.Println("断开", (leader+1)%servers)
 
 	// the leader and remaining follower should be
 	// able to agree despite the disconnected follower.
@@ -171,7 +171,7 @@ func TestFailAgree2B(t *testing.T) {
 	cfg.one(105, servers-1, false)
 
 	// re-connect
-	fmt.Println("回归", (leader+1)%servers)
+	//fmt.Println("回归", (leader+1)%servers)
 	cfg.connect((leader + 1) % servers)
 
 	// the full set of servers should preserve
@@ -196,11 +196,11 @@ func TestFailNoAgree2B(t *testing.T) {
 	// 3 of 5 followers disconnect
 	leader := cfg.checkOneLeader()
 	cfg.disconnect((leader + 1) % servers)
-	fmt.Println("断开", (leader+1)%servers)
+	//fmt.Println("断开", (leader+1)%servers)
 	cfg.disconnect((leader + 2) % servers)
-	fmt.Println("断开", (leader+2)%servers)
+	//fmt.Println("断开", (leader+2)%servers)
 	cfg.disconnect((leader + 3) % servers)
-	fmt.Println("断开", (leader+3)%servers)
+	//fmt.Println("断开", (leader+3)%servers)
 
 	index, _, ok := cfg.rafts[leader].Start(20)
 	if ok != true {
@@ -219,11 +219,11 @@ func TestFailNoAgree2B(t *testing.T) {
 
 	// repair
 	cfg.connect((leader + 1) % servers)
-	fmt.Println("恢复", (leader+1)%servers)
+	//fmt.Println("恢复", (leader+1)%servers)
 	cfg.connect((leader + 2) % servers)
-	fmt.Println("恢复", (leader+2)%servers)
+	//fmt.Println("恢复", (leader+2)%servers)
 	cfg.connect((leader + 3) % servers)
-	fmt.Println("恢复", (leader+3)%servers)
+	//fmt.Println("恢复", (leader+3)%servers)
 
 	// the disconnected majority may have chosen a leader from
 	// among their own ranks, forgetting index 2.
@@ -394,7 +394,7 @@ func TestBackup2B(t *testing.T) {
 	cfg.disconnect((leader1 + 2) % servers)
 	cfg.disconnect((leader1 + 3) % servers)
 	cfg.disconnect((leader1 + 4) % servers)
-	fmt.Println("断开", (leader1+2)%servers, (leader1+3)%servers, (leader1+4)%servers)
+	//fmt.Println("断开", (leader1+2)%servers, (leader1+3)%servers, (leader1+4)%servers)
 
 	// submit lots of commands that won't commit
 	for i := 0; i < 50; i++ {
@@ -764,6 +764,7 @@ func TestUnreliableAgree2C(t *testing.T) {
 		for j := 0; j < 4; j++ {
 			wg.Add(1)
 			go func(iters, j int) {
+				//fmt.Println("测试55",(100*iters)+j)
 				defer wg.Done()
 				cfg.one((100*iters)+j, 1, true)
 			}(iters, j)
@@ -771,10 +772,12 @@ func TestUnreliableAgree2C(t *testing.T) {
 		cfg.one(iters, 1, true)
 	}
 
+	//fmt.Println("bukeako")
 	cfg.setunreliable(false)
 
 	wg.Wait()
 
+	//fmt.Println("one一下")
 	cfg.one(100, servers, true)
 
 	cfg.end()
