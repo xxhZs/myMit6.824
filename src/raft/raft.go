@@ -481,6 +481,7 @@ func (rf *Raft) setReplyVote(reply RequestVoteReply, server int) {
 					continue
 				}
 				//DPrintf("nextindex的长度 %v",len(rf.nextIndex))9
+				//DPrintf("nextindex的长度 %v",len(rf.nextIndex))9
 				rf.nextIndex[i] = len(rf.log)
 				rf.matchIndex[i] = -1
 				// 发送心跳！！
@@ -518,7 +519,7 @@ func (rf *Raft) selectTimer() {
 		case <-rf.heaterTimer.C:
 			rf.mu.Lock()
 			if rf.State == "Leader" {
-				rf.sendLogAppendEntries()
+				rf.sendLogAppendEntries(-1)
 				rf.DPrintf("leader%v,%v", rf.currentTetm, rf.State)
 				rf.heaterTimer.Reset(HeartbeatInterval)
 			}
@@ -536,13 +537,45 @@ type AppendEntries struct {
 	LeaderCommit int
 }
 
-func (rf *Raft) sendLogAppendEntries() {
-	//发送日志
-	rf.DPrintf("发送同步日志")
-	for serverNum := 0; serverNum < len(rf.peers); serverNum++ {
-		if serverNum == rf.me {
-			continue
+func (rf *Raft) sendLogAppendEntries(serverNum1 int) {
+	if serverNum1 == -1 {
+		//发送日志
+		rf.DPrintf("发送同步日志")
+		for serverNum := 0; serverNum < len(rf.peers); serverNum++ {
+			if serverNum == rf.me {
+				continue
+			}
+			appendEntries := AppendEntries{
+				Term:     rf.currentTetm,
+				LeaderId: rf.me,
+				//PrevLogTerm: rf.log[rf.nextIndex[serverNum]].Term,
+				//Entrys: rf.log[rf.nextIndex[serverNum]:],
+				LeaderCommit: rf.commitIndex,
+			}
+			appendEntries.PrevLogIndex = rf.nextIndex[serverNum] - 1
+			rf.DPrintf("测试 %v", rf.nextIndex)
+			if appendEntries.PrevLogIndex >= 0 {
+				appendEntries.PrevLogTerm = rf.log[appendEntries.PrevLogIndex].Term
+			}
+			if rf.nextIndex[serverNum] < len(rf.log) {
+				appendEntries.Entrys = rf.log[rf.nextIndex[serverNum]:]
+			}
+			if rf.State != "Leader" {
+				return
+			}
+			//发送append
+			go func(server int, args AppendEntries) {
+				rf.DPrintf("发送同步日志 %v ---> %v , %v", rf.me, server, args)
+				var reply RequestVoteReply
+				flag := rf.sendAppendEntries(server, args, &reply)
+				if flag {
+					rf.handleAppendEntries(server, reply, args)
+				}
+				//没有发送成功就再次发送
+			}(serverNum, appendEntries)
 		}
+	} else {
+		rf.DPrintf("重新发送日志%v ---> %v", rf.me, serverNum1)
 		appendEntries := AppendEntries{
 			Term:     rf.currentTetm,
 			LeaderId: rf.me,
@@ -550,51 +583,44 @@ func (rf *Raft) sendLogAppendEntries() {
 			//Entrys: rf.log[rf.nextIndex[serverNum]:],
 			LeaderCommit: rf.commitIndex,
 		}
+		appendEntries.PrevLogIndex = rf.nextIndex[serverNum1] - 1
+		rf.DPrintf("测试 %v", rf.nextIndex)
+		if appendEntries.PrevLogIndex >= 0 {
+			appendEntries.PrevLogTerm = rf.log[appendEntries.PrevLogIndex].Term
+		}
+		if rf.nextIndex[serverNum1] < len(rf.log) {
+			appendEntries.Entrys = rf.log[rf.nextIndex[serverNum1]:]
+		}
+		if rf.State != "Leader" {
+			return
+		}
 		//发送append
 		go func(server int, args AppendEntries) {
-			for {
-				rf.mu.Lock()
-				args.PrevLogIndex = rf.nextIndex[server] - 1
-				rf.DPrintf("测试 %v", rf.nextIndex)
-				if args.PrevLogIndex >= 0 {
-					args.PrevLogTerm = rf.log[args.PrevLogIndex].Term
-				}
-				if rf.nextIndex[server] < len(rf.log) {
-					args.Entrys = rf.log[rf.nextIndex[server]:]
-				}
-				if rf.State != "Leader" {
-					rf.mu.Unlock()
-					return
-				}
-				rf.mu.Unlock()
-				rf.DPrintf("发送同步日志 %v ---> %v , %v", rf.me, server, args)
-				var reply RequestVoteReply
-				flag := rf.sendAppendEntries(server, args, &reply)
-				if flag {
-					if rf.handleAppendEntries(server, reply, args) {
-						break
-					}
-				} else {
-					break
-				}
-				//没有发送成功就再次发送
-				rf.DPrintf("重新发送日志%v ---> %v", rf.me, server)
+
+			rf.DPrintf("发送同步日志 %v ---> %v , %v", rf.me, server, args)
+			var reply RequestVoteReply
+			flag := rf.sendAppendEntries(server, args, &reply)
+			if flag {
+				rf.handleAppendEntries(server, reply, args)
 			}
-		}(serverNum, appendEntries)
+			//没有发送成功就再次发送
+			//rf.DPrintf("重新发送日志%v ---> %v", rf.me, server)
+		}(serverNum1, appendEntries)
 	}
+
 }
 func (rf *Raft) sendAppendEntries(server int, args AppendEntries, reply *RequestVoteReply) bool {
 	//
 	ok := rf.peers[server].Call("Raft.GetAppendEntries", &args, reply)
 	return ok
 }
-func (rf *Raft) handleAppendEntries(serverNum int, reply RequestVoteReply, args AppendEntries) bool {
+func (rf *Raft) handleAppendEntries(serverNum int, reply RequestVoteReply, args AppendEntries) {
 	//获得返回值，发送成功和发送失败
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	if rf.State != "Leader" {
 		rf.DPrintf("这个raft已经不是leader %v", rf.State)
-		return true
+		return
 	}
 	if reply.Term > rf.currentTetm {
 		rf.DPrintf("这个raft（leader）过时了，变成follower")
@@ -602,7 +628,7 @@ func (rf *Raft) handleAppendEntries(serverNum int, reply RequestVoteReply, args 
 		rf.currentTetm = reply.Term
 		rf.convertTo("Follower")
 		rf.persist()
-		return true
+		return
 	}
 	rf.DPrintf("%v", reply.VoteGranted)
 	//这里可能只是一个心跳
@@ -611,7 +637,7 @@ func (rf *Raft) handleAppendEntries(serverNum int, reply RequestVoteReply, args 
 		//更新成功
 		if rf.nextIndex[serverNum] > args.PrevLogIndex+len(args.Entrys)+1 {
 			rf.DPrintf("虽然成功，但是这个rpc是乱序的")
-			return true
+			return
 		}
 		rf.nextIndex[serverNum] = args.PrevLogIndex + len(args.Entrys) + 1
 		rf.matchIndex[serverNum] = rf.nextIndex[serverNum] - 1
@@ -636,12 +662,12 @@ func (rf *Raft) handleAppendEntries(serverNum int, reply RequestVoteReply, args 
 			rf.DPrintf("提交日志，%v", rf.commitIndex)
 			go rf.CommitLog()
 		}
-		return true
+		return
 	} else if reply.VoteGranted == 0 {
 		rf.DPrintf("日志不同步 reply %v nextindex %v %v", reply, rf.nextIndex, serverNum)
 		if reply.XIndex > rf.nextIndex[serverNum] || reply.XIndex < rf.matchIndex[serverNum] {
 			rf.DPrintf("rpc过时了")
-			return true
+			return
 		}
 		//重新发送,此处进行优化
 		if reply.XTerm == -1 {
@@ -663,9 +689,7 @@ func (rf *Raft) handleAppendEntries(serverNum int, reply RequestVoteReply, args 
 			}
 		}
 		rf.DPrintf("日志不同步，更新nextindex后继续发送，%v ,%v", rf.nextIndex[serverNum], serverNum)
-		return false
-	} else {
-		return true
+		rf.sendLogAppendEntries(serverNum)
 	}
 }
 func (rf *Raft) CommitLog() {
@@ -786,7 +810,7 @@ func (rf *Raft) convertTo(state string) {
 	case "Leader":
 		rf.DPrintf("转移为Leader")
 		rf.electionTimer.Stop()
-		rf.sendLogAppendEntries()
+		rf.sendLogAppendEntries(-1)
 		rf.heaterTimer.Reset(HeartbeatInterval)
 	case "Follower":
 		rf.DPrintf("转移为follower")
