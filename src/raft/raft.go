@@ -20,6 +20,7 @@ package raft
 import (
 	"6.824lab/labgob"
 	"bytes"
+
 	"math/rand"
 	"sync"
 	"time"
@@ -42,6 +43,8 @@ import "6.824lab/labrpc"
 // ApplyMsg, but set CommandValid to false for these other uses.
 //
 type ApplyMsg struct {
+	IsSnap       bool
+	SnapShot     []byte
 	CommandValid bool
 	Command      interface{}
 	CommandIndex int
@@ -53,7 +56,7 @@ type ApplyMsg struct {
 type Raft struct {
 	mu        sync.Mutex          // Lock to protect shared access to this peer's state
 	peers     []*labrpc.ClientEnd // RPC end points of all peers
-	persister *Persister          // Object to hold this peer's persisted state
+	Persister *Persister          // Object to hold this peer's persisted state
 	me        int                 // this peer's index into peers[]
 	dead      int32               // set by Kill()
 
@@ -80,19 +83,21 @@ type Raft struct {
 	//心跳计时与超时选举计时
 	electionTimer *time.Timer
 	heaterTimer   *time.Timer
-
-	applyCh chan ApplyMsg
+	applyCh       chan ApplyMsg
+	//实现快照添加
+	SnaplastIndex int
+	SnaplastTerm  int
 }
 
-func (rf *Raft) GetMe() int {
-	return rf.me
+//快照需要的辅助反法
+func (rf *Raft) getAbsolutionLog(nowIndex int) int {
+	return nowIndex + rf.SnaplastIndex
 }
-func (rf *Raft) GetStates() string {
-	return rf.State
+func (rf *Raft) getNowLogIndex(Absolution int) int {
+	return Absolution - rf.SnaplastIndex
 }
-func (rf *Raft) GetTerm() int {
-
-	return rf.currentTetm
+func (rf *Raft) getLenLog() int {
+	return len(rf.log) + rf.SnaplastIndex
 }
 
 //日志信息
@@ -136,7 +141,7 @@ func (rf *Raft) persist() {
 	e.Encode(rf.votedFor)
 	e.Encode(rf.log)
 	data := w.Bytes()
-	rf.persister.SaveRaftState(data)
+	rf.Persister.SaveRaftState(data)
 }
 
 //
@@ -384,7 +389,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 
 	rf := &Raft{}
 	rf.peers = peers
-	rf.persister = persister
+	rf.Persister = persister
 	rf.me = me
 	rf.DPrintf("初始化raft")
 	// Your initialization code here (2A, 2B, 2C).
@@ -404,6 +409,9 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.State = "Follower"
 
 	//rf.leader = make(chan int)
+	//初始化快照
+	rf.SnaplastIndex = -1
+	rf.SnaplastTerm = -1
 	//此处进行超时等待调用 2
 	if rf.heaterTimer != nil {
 		rf.heaterTimer.Stop()
@@ -547,7 +555,94 @@ type AppendEntries struct {
 	Entrys       []LogEntry
 	LeaderCommit int
 }
+type InstallSnapshot struct {
+	Term          int
+	LeaderId      int
+	Data          []byte
+	SnaplastIndex int
+	SnaplastTerm  int
+}
 
+func (rf *Raft) sendInstallSnapshot(serverNum int) {
+	rf.DPrintf("发送快照")
+	appendEntries := rf.getAppendEntries(serverNum)
+	installSnapshot := InstallSnapshot{
+		Term:          appendEntries.Term,
+		LeaderId:      appendEntries.LeaderId,
+		SnaplastIndex: rf.SnaplastIndex,
+		SnaplastTerm:  rf.SnaplastTerm,
+		Data:          rf.Persister.ReadSnapshot(),
+	}
+	go func(server int, args InstallSnapshot) {
+		rf.DPrintf("发送同步日志 %v ---> %v , %v", rf.me, server, args)
+		var reply RequestVoteReply
+		flag := rf.sendInstall(server, args, &reply)
+		if !flag {
+			return
+		}
+		rf.mu.Lock()
+		defer rf.mu.Unlock()
+		//if rf.currentTetm != args.Term{
+		//	return
+		//}
+		if reply.Term != rf.currentTetm {
+			return
+		}
+		rf.nextIndex[server] = args.SnaplastIndex + 1
+		rf.matchIndex[server] = args.SnaplastIndex
+		go rf.CommitLog()
+		//没有发送成功就再次发送
+	}(serverNum, installSnapshot)
+}
+
+func (rf *Raft) sendInstall(server int, args InstallSnapshot, reply *RequestVoteReply) bool {
+	ok := rf.peers[server].Call("Raft.Install", &args, reply)
+	return ok
+}
+func (rf *Raft) Install(args InstallSnapshot, reply *RequestVoteReply) {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	//这里会进行抛弃后续，然后下一个append来同步
+	reply.Term = rf.currentTetm
+	if args.Term < rf.currentTetm {
+		return
+	}
+	if args.Term > rf.currentTetm {
+		rf.electionTimer.Reset(rf.getTimeOut())
+		rf.convertTo("Follower")
+	}
+	if args.SnaplastIndex <= rf.SnaplastIndex {
+		return
+	}
+	//这里就是要看是哪种情况，要么是不够index，要么是超过index
+	if args.SnaplastIndex < rf.getLenLog() {
+		//这里代表的是多余，把后面的内容删除，让下一个append来更新
+		if args.SnaplastTerm == rf.log[rf.getNowLogIndex(rf.SnaplastIndex)].Term {
+			//这里说明日志一致，没必要全删
+			rf.log = append(make([]LogEntry, 0), rf.log[args.SnaplastIndex-rf.SnaplastTerm:]...)
+		} else {
+			rf.log = make([]LogEntry, 0)
+		}
+	} else {
+		rf.log = make([]LogEntry, 0)
+	}
+	rf.SnaplastIndex = args.SnaplastIndex
+	rf.SnaplastTerm = args.SnaplastTerm
+	rf.lastApplied = Max(rf.SnaplastIndex, rf.lastApplied)
+	rf.encodeRaftSnap(args.Data)
+	msg := ApplyMsg{
+		IsSnap:   true,
+		SnapShot: rf.Persister.ReadSnapshot(),
+	}
+	rf.applyCh <- msg
+}
+func Max(a int, b int) int {
+	if a > b {
+		return a
+	} else {
+		return b
+	}
+}
 func (rf *Raft) sendLogAppendEntries(serverNum1 int) {
 	if serverNum1 == -1 {
 		//发送日志
@@ -556,21 +651,11 @@ func (rf *Raft) sendLogAppendEntries(serverNum1 int) {
 			if serverNum == rf.me {
 				continue
 			}
-			appendEntries := AppendEntries{
-				Term:     rf.currentTetm,
-				LeaderId: rf.me,
-				//PrevLogTerm: rf.log[rf.nextIndex[serverNum]].Term,
-				//Entrys: rf.log[rf.nextIndex[serverNum]:],
-				LeaderCommit: rf.commitIndex,
+			if rf.nextIndex[serverNum] <= rf.SnaplastIndex {
+				rf.sendInstallSnapshot(serverNum)
+				return
 			}
-			appendEntries.PrevLogIndex = rf.nextIndex[serverNum] - 1
-			rf.DPrintf("测试 %v", rf.nextIndex)
-			if appendEntries.PrevLogIndex >= 0 {
-				appendEntries.PrevLogTerm = rf.log[appendEntries.PrevLogIndex].Term
-			}
-			if rf.nextIndex[serverNum] < len(rf.log) {
-				appendEntries.Entrys = rf.log[rf.nextIndex[serverNum]:]
-			}
+			appendEntries := rf.getAppendEntries(serverNum)
 			if rf.State != "Leader" {
 				return
 			}
@@ -587,27 +672,12 @@ func (rf *Raft) sendLogAppendEntries(serverNum1 int) {
 		}
 	} else {
 		rf.DPrintf("重新发送日志%v ---> %v", rf.me, serverNum1)
-		appendEntries := AppendEntries{
-			Term:     rf.currentTetm,
-			LeaderId: rf.me,
-			//PrevLogTerm: rf.log[rf.nextIndex[serverNum]].Term,
-			//Entrys: rf.log[rf.nextIndex[serverNum]:],
-			LeaderCommit: rf.commitIndex,
-		}
-		appendEntries.PrevLogIndex = rf.nextIndex[serverNum1] - 1
-		rf.DPrintf("测试 %v", rf.nextIndex)
-		if appendEntries.PrevLogIndex >= 0 {
-			appendEntries.PrevLogTerm = rf.log[appendEntries.PrevLogIndex].Term
-		}
-		if rf.nextIndex[serverNum1] < len(rf.log) {
-			appendEntries.Entrys = rf.log[rf.nextIndex[serverNum1]:]
-		}
+		appendEntries := rf.getAppendEntries(serverNum1)
 		if rf.State != "Leader" {
 			return
 		}
 		//发送append
 		go func(server int, args AppendEntries) {
-
 			rf.DPrintf("发送同步日志 %v ---> %v , %v", rf.me, server, args)
 			var reply RequestVoteReply
 			flag := rf.sendAppendEntries(server, args, &reply)
@@ -620,6 +690,23 @@ func (rf *Raft) sendLogAppendEntries(serverNum1 int) {
 	}
 
 }
+func (rf *Raft) getAppendEntries(serverNum1 int) AppendEntries {
+	appendEntries := AppendEntries{
+		Term:         rf.currentTetm,
+		LeaderId:     rf.me,
+		LeaderCommit: rf.commitIndex,
+	}
+	appendEntries.PrevLogIndex = rf.nextIndex[serverNum1] - 1
+	rf.DPrintf("测试 %v", rf.nextIndex)
+	if appendEntries.PrevLogIndex >= 0 {
+		appendEntries.PrevLogTerm = rf.log[appendEntries.PrevLogIndex].Term
+	}
+	if rf.nextIndex[serverNum1] < len(rf.log) {
+		appendEntries.Entrys = rf.log[rf.nextIndex[serverNum1]:]
+	}
+	return appendEntries
+}
+
 func (rf *Raft) sendAppendEntries(server int, args AppendEntries, reply *RequestVoteReply) bool {
 	//
 	ok := rf.peers[server].Call("Raft.GetAppendEntries", &args, reply)
@@ -832,4 +919,36 @@ func (rf *Raft) convertTo(state string) {
 		rf.DPrintf("转移为Candidate")
 		rf.getElection()
 	}
+}
+
+/*
+快照
+*/
+func (rf *Raft) TakeRaftSnapShot(applyRaftLogIndex int, byte2 []byte) {
+	//要进行的工作主要是更新各种参数，然后进行更改
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+
+	index := applyRaftLogIndex - rf.SnaplastIndex
+	if applyRaftLogIndex <= rf.SnaplastIndex {
+		return
+	}
+	rf.SnaplastTerm = rf.log[rf.getNowLogIndex(applyRaftLogIndex)].Term
+	rf.SnaplastIndex = applyRaftLogIndex
+	rf.log = append(make([]LogEntry, 0), rf.log[index:]...)
+	rf.encodeRaftSnap(byte2)
+}
+
+/*
+快照持久化，不和其他持久化一起的原因是防止多次持久化
+*/
+func (rf *Raft) encodeRaftSnap(byte2 []byte) {
+	w := new(bytes.Buffer)
+	e := labgob.NewEncoder(w)
+	e.Encode(rf.currentTetm)
+	e.Encode(rf.votedFor)
+	e.Encode(rf.log)
+	e.Encode(rf.SnaplastTerm)
+	e.Encode(rf.SnaplastIndex)
+	rf.Persister.SaveStateAndSnapshot(w.Bytes(), byte2)
 }

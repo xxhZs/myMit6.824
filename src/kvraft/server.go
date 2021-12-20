@@ -4,6 +4,7 @@ import (
 	"6.824lab/labgob"
 	"6.824lab/labrpc"
 	"6.824lab/raft"
+	"bytes"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -21,9 +22,6 @@ func DPrintf(format string, kvId int, a ...interface{}) (n int, err error) {
 	return
 }
 
-/*
-
- */
 type Op struct {
 	// Your definitions here.
 	// Field names must start with capital letters,
@@ -48,6 +46,9 @@ type KVServer struct {
 	db        map[string]string // 数据
 	lastReply map[int64]int     // 防止重复执行
 	chMap     map[int]chan Op
+	//实现快照
+	applyRaftLogIndex int
+	Persister         *raft.Persister
 }
 
 func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
@@ -190,7 +191,15 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 	kv.chMap = make(map[int]chan Op)
 	kv.db = make(map[string]string)
 	kv.lastReply = make(map[int64]int)
+	//初始化shop
+	kv.Persister = persister
+	snap := kv.Persister.ReadSnapshot()
+	if snap != nil && len(snap) > 0 {
+		kv.installSnapshot(snap)
+	}
+
 	go kv.waitCommit()
+	go kv.snapshotMonitor()
 
 	return kv
 }
@@ -199,6 +208,10 @@ func (kv *KVServer) waitCommit() {
 	for {
 		select {
 		case msg := <-kv.applyCh:
+			if msg.IsSnap {
+				kv.installSnapshot(msg.SnapShot)
+				continue
+			}
 			op := msg.Command.(Op)
 			DPrintf("收到提交 Op%v", kv.me, op)
 			kv.mu.Lock()
@@ -233,9 +246,43 @@ func (kv *KVServer) waitCommit() {
 /*
 *server层上的快照生成
  */
+func (kv *KVServer) takeSnapshot() {
+	w := new(bytes.Buffer)
+	e := labgob.NewEncoder(w)
+	kv.mu.Lock()
+	e.Encode(kv.db)
+	e.Encode(kv.lastReply)
+	applyRaftLogIndex := kv.applyRaftLogIndex
+	kv.mu.Unlock()
+	//同步到raft层
+	kv.rf.TakeRaftSnapShot(applyRaftLogIndex, w.Bytes())
+}
+
 /*
 server层上的快照保存
 */
+func (kv *KVServer) installSnapshot(snapshot []byte) {
+	kv.mu.Lock()
+	defer kv.mu.Unlock()
+	if snapshot != nil {
+		r := bytes.NewBuffer(snapshot)
+		d := labgob.NewDecoder(r)
+		d.Decode(&kv.db)
+		d.Decode(&kv.lastReply)
+	}
+}
+
 /*
-* 是否要生成快照
- */
+判断快照的主方法
+*/
+func (kv *KVServer) snapshotMonitor() {
+	for {
+		if kv.maxraftstate == -1 {
+			return
+		}
+		if kv.rf.Persister.RaftStateSize() >= kv.maxraftstate {
+			kv.takeSnapshot()
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+}
