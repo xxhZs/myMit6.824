@@ -4,24 +4,35 @@ import (
 	"6.824lab/labgob"
 	"6.824lab/labrpc"
 	"6.824lab/raft"
-	"log"
+	"fmt"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
-const Debug = 0
+const Debug = 1
 
-func DPrintf(format string, a ...interface{}) (n int, err error) {
+func DPrintf(format string, kvId int, a ...interface{}) (n int, err error) {
 	if Debug > 0 {
-		log.Printf(format, a...)
+		format = "[peer %v] " + format
+		a = append([]interface{}{kvId}, a...)
+		fmt.Printf(format+"\n", a...)
 	}
 	return
 }
 
+/*
+
+ */
 type Op struct {
 	// Your definitions here.
 	// Field names must start with capital letters,
 	// otherwise RPC will break.
+	Key       string
+	Value     string
+	OpType    string
+	ClientId  int64
+	RequestId int
 }
 
 type KVServer struct {
@@ -34,14 +45,96 @@ type KVServer struct {
 	maxraftstate int // snapshot if log grows this big
 
 	// Your definitions here.
+	db        map[string]string // 数据
+	lastReply map[int64]int     // 防止重复执行
+	chMap     map[int]chan Op
 }
 
 func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 	// Your code here.
+	DPrintf("Kv 执行get,%v", kv.me, args)
+	_, isLeader := kv.rf.GetState()
+	if !isLeader {
+		reply.Err = ErrWrongLeader
+		reply.IsLeader = false
+		return
+	}
+	//是leader，所以需要进行请求处理,判断是不是重复请求
+	kv.mu.Lock()
+	lastReply, ok := kv.lastReply[args.ClientId]
+	if ok && lastReply > args.RequestId {
+		DPrintf("指令过期%v,%v", kv.me, lastReply, args.RequestId)
+		reply.Value = kv.db[args.Key]
+		reply.Err = OK
+		kv.mu.Unlock()
+		return
+	}
+	kv.mu.Unlock()
+	//从raft进行操作
+	command := Op{
+		Key:       args.Key,
+		OpType:    "GET",
+		ClientId:  args.ClientId,
+		RequestId: args.RequestId,
+	}
+	isok, appliOp := kv.getCh(command)
+	if !isok {
+		reply.Err = ErrWrongLeader
+		reply.IsLeader = false
+		return
+	}
+	reply.IsLeader = true
+	reply.Err = OK
+	reply.Value = appliOp.Value
 }
 
+func (kv *KVServer) getCh(op Op) (bool, Op) {
+
+	index, _, isLeader := kv.rf.Start(op)
+	if !isLeader {
+		return false, op
+	}
+	kv.mu.Lock()
+	opCh, ok := kv.chMap[index]
+	if !ok {
+		opCh = make(chan Op, 1)
+		kv.chMap[index] = opCh
+	}
+	kv.mu.Unlock()
+	//监听消息
+	select {
+	case ap := <-opCh:
+		return op.ClientId == ap.ClientId && op.RequestId == ap.RequestId, ap
+	case <-time.After(600 * time.Millisecond):
+		return false, op
+	}
+}
 func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	// Your code here.
+	DPrintf("Kv 执行PutAppend,%v", kv.me, args)
+	_, isLeader := kv.rf.GetState()
+	if !isLeader {
+		reply.Err = ErrWrongLeader
+		reply.IsLeader = false
+		return
+	}
+	reply.IsLeader = true
+
+	//这里要不要判断重复呢？
+	commod := Op{
+		Key:       args.Key,
+		Value:     args.Value,
+		OpType:    args.Op,
+		ClientId:  args.ClientId,
+		RequestId: args.RequestId,
+	}
+	ok, _ := kv.getCh(commod)
+	if !ok {
+		reply.Err = ErrWrongLeader
+		reply.IsLeader = false
+		return
+	}
+	reply.Err = OK
 }
 
 //
@@ -94,6 +187,55 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 	kv.rf = raft.Make(servers, me, persister, kv.applyCh)
 
 	// You may need initialization code here.
+	kv.chMap = make(map[int]chan Op)
+	kv.db = make(map[string]string)
+	kv.lastReply = make(map[int64]int)
+	go kv.waitCommit()
 
 	return kv
 }
+func (kv *KVServer) waitCommit() {
+	DPrintf("循环等待提交", kv.me)
+	for {
+		select {
+		case msg := <-kv.applyCh:
+			op := msg.Command.(Op)
+			DPrintf("收到提交 Op%v", kv.me, op)
+			kv.mu.Lock()
+			requedtId, ok := kv.lastReply[op.ClientId]
+			if op.OpType == "GET" {
+				op.Value = kv.db[op.Key]
+			} else {
+				if !ok || op.RequestId > requedtId {
+					switch op.OpType {
+					case "Put":
+						DPrintf("put 写入库", kv.me)
+						kv.db[op.Key] = op.Value
+					case "Append":
+						DPrintf("append 写入库", kv.me)
+						kv.db[op.Key] += op.Value
+					}
+					kv.lastReply[op.ClientId] = op.RequestId
+				}
+			}
+			DPrintf("getCh", kv.me)
+			opCh, Ok := kv.chMap[msg.CommandIndex]
+			if !Ok {
+				opCh = make(chan Op, 1)
+				kv.chMap[msg.CommandIndex] = opCh
+			}
+			opCh <- op
+			kv.mu.Unlock()
+		}
+	}
+}
+
+/*
+*server层上的快照生成
+ */
+/*
+server层上的快照保存
+*/
+/*
+* 是否要生成快照
+ */

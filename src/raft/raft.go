@@ -84,6 +84,17 @@ type Raft struct {
 	applyCh chan ApplyMsg
 }
 
+func (rf *Raft) GetMe() int {
+	return rf.me
+}
+func (rf *Raft) GetStates() string {
+	return rf.State
+}
+func (rf *Raft) GetTerm() int {
+
+	return rf.currentTetm
+}
+
 //日志信息
 type LogEntry struct {
 	Index   int
