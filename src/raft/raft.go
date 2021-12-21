@@ -228,7 +228,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	//日志判断
 	if len(rf.log) > 0 {
 		if (rf.log[len(rf.log)-1].Term > args.LastLogTerm) ||
-			((rf.log[len(rf.log)-1].Term == args.LastLogTerm) && len(rf.log)-1 > args.LastLogIndex) {
+			((rf.log[len(rf.log)-1].Term == args.LastLogTerm) && len(rf.log)-1 > rf.getNowLogIndex(args.LastLogIndex)) {
 			rf.DPrintf("通过日志比较，当前的候选人 %v 无效", args.CandidateID)
 			voteGranted = 0
 		}
@@ -342,7 +342,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	logcopy := append(rf.log, nlog)
 	rf.log = make([]LogEntry, len(logcopy))
 	copy(rf.log, logcopy)
-	index = len(rf.log)
+	index = rf.getLenLog()
 	term = rf.currentTetm
 	rf.persist()
 	//rf.sendLogAppendEntries()
@@ -446,10 +446,10 @@ func (rf *Raft) getElection() {
 	args := RequestVoteArgs{
 		Term:         rf.currentTetm,
 		CandidateID:  rf.me,
-		LastLogIndex: len(rf.log) - 1,
+		LastLogIndex: rf.getLenLog() - 1,
 	}
 	if len(rf.log) > 0 {
-		args.LastLogTerm = rf.log[args.LastLogIndex].Term
+		args.LastLogTerm = rf.log[rf.getNowLogIndex(args.LastLogIndex)].Term
 	}
 	//此处进行发送选举
 	for serverNum := 0; serverNum < len(rf.peers); serverNum++ {
@@ -501,7 +501,7 @@ func (rf *Raft) setReplyVote(reply RequestVoteReply, server int) {
 				}
 				//DPrintf("nextindex的长度 %v",len(rf.nextIndex))9
 				//DPrintf("nextindex的长度 %v",len(rf.nextIndex))9
-				rf.nextIndex[i] = len(rf.log)
+				rf.nextIndex[i] = rf.getLenLog()
 				rf.matchIndex[i] = -1
 				// 发送心跳！！
 			}
@@ -596,7 +596,7 @@ func (rf *Raft) sendInstallSnapshot(serverNum int) {
 }
 
 func (rf *Raft) sendInstall(server int, args InstallSnapshot, reply *RequestVoteReply) bool {
-	ok := rf.peers[server].Call("Raft.Install", &args, reply)
+	ok := rf.peers[server].Call("Raft.Install", args, reply)
 	return ok
 }
 func (rf *Raft) Install(args InstallSnapshot, reply *RequestVoteReply) {
@@ -653,7 +653,7 @@ func (rf *Raft) sendLogAppendEntries(serverNum1 int) {
 			}
 			if rf.nextIndex[serverNum] <= rf.SnaplastIndex {
 				rf.sendInstallSnapshot(serverNum)
-				return
+				continue
 			}
 			appendEntries := rf.getAppendEntries(serverNum)
 			if rf.State != "Leader" {
@@ -699,10 +699,10 @@ func (rf *Raft) getAppendEntries(serverNum1 int) AppendEntries {
 	appendEntries.PrevLogIndex = rf.nextIndex[serverNum1] - 1
 	rf.DPrintf("测试 %v", rf.nextIndex)
 	if appendEntries.PrevLogIndex >= 0 {
-		appendEntries.PrevLogTerm = rf.log[appendEntries.PrevLogIndex].Term
+		appendEntries.PrevLogTerm = rf.log[rf.getNowLogIndex(appendEntries.PrevLogIndex)].Term
 	}
-	if rf.nextIndex[serverNum1] < len(rf.log) {
-		appendEntries.Entrys = rf.log[rf.nextIndex[serverNum1]:]
+	if rf.getNowLogIndex(rf.nextIndex[serverNum1]) < len(rf.log) {
+		appendEntries.Entrys = rf.log[rf.getNowLogIndex(rf.nextIndex[serverNum1]):]
 	}
 	return appendEntries
 }
@@ -740,8 +740,8 @@ func (rf *Raft) handleAppendEntries(serverNum int, reply RequestVoteReply, args 
 		rf.nextIndex[serverNum] = args.PrevLogIndex + len(args.Entrys) + 1
 		rf.matchIndex[serverNum] = rf.nextIndex[serverNum] - 1
 		rf.DPrintf("测试： %v,%v", rf.matchIndex, rf.nextIndex)
-		if rf.nextIndex[serverNum] > len(rf.log) { //debug
-			rf.nextIndex[serverNum] = len(rf.log)
+		if rf.nextIndex[serverNum] > rf.getLenLog() { //debug
+			rf.nextIndex[serverNum] = rf.getLenLog()
 			rf.matchIndex[serverNum] = rf.nextIndex[serverNum] - 1
 		}
 		//这里要提交日志
@@ -754,7 +754,7 @@ func (rf *Raft) handleAppendEntries(serverNum int, reply RequestVoteReply, args 
 		}
 		rf.DPrintf("判断是否提交 %v", curentIndex)
 		if curentIndex >= len(rf.peers)/2 && rf.commitIndex < rf.matchIndex[serverNum] &&
-			rf.log[rf.matchIndex[serverNum]].Term == rf.currentTetm {
+			rf.log[rf.getNowLogIndex(rf.matchIndex[serverNum])].Term == rf.currentTetm {
 			//&& rf.log[rf.matchIndex[serverNum]].Term == rf.currentTetm
 			rf.commitIndex = rf.matchIndex[serverNum]
 			rf.DPrintf("提交日志，%v", rf.commitIndex)
@@ -776,7 +776,7 @@ func (rf *Raft) handleAppendEntries(serverNum int, reply RequestVoteReply, args 
 			rf.DPrintf("找到任期对应的槽位 %v", reply.XTerm)
 			index := reply.XIndex //80
 			for ; index < args.PrevLogIndex; index++ {
-				if rf.log[index].Term == reply.Term { //32
+				if rf.log[rf.getNowLogIndex(index)].Term == reply.Term { //32
 					break
 				}
 			}
@@ -804,7 +804,7 @@ func (rf *Raft) CommitLog() {
 		rf.DPrintf("日志提交, %v", i)
 		rf.applyCh <- ApplyMsg{
 			CommandIndex: i + 1,
-			Command:      rf.log[i].Command,
+			Command:      rf.log[rf.getNowLogIndex(i)].Command,
 			CommandValid: true,
 		}
 	}
@@ -833,8 +833,8 @@ func (rf *Raft) GetAppendEntries(args *AppendEntries, reply *RequestVoteReply) {
 		rf.DPrintf("收到日志信息,leader 无效")
 		return
 	}
-	if args.PrevLogIndex >= 0 &&
-		(len(rf.log)-1 < args.PrevLogIndex || rf.log[args.PrevLogIndex].Term != args.PrevLogTerm) {
+	if rf.getNowLogIndex(args.PrevLogIndex) >= 0 &&
+		(rf.getLenLog()-1 < args.PrevLogIndex || rf.log[rf.getNowLogIndex(args.PrevLogIndex)].Term != args.PrevLogTerm) {
 		rf.electionTimer.Reset(rf.getTimeOut())
 		rf.convertTo("Follower")
 		//这里进行优化，主要是通过XTerm，XIndex和Xlen进行优化，
@@ -842,22 +842,22 @@ func (rf *Raft) GetAppendEntries(args *AppendEntries, reply *RequestVoteReply) {
 		//xindex，对应人气好为xterm的第一条log条目的槽位号
 		reply.VoteGranted = 0
 		//每次都删除
-		if len(rf.log)-1 < args.PrevLogIndex {
+		if rf.getLenLog()-1 < args.PrevLogIndex {
 			//日志空白
 			reply.XTerm = -1
-			reply.XIndex = len(rf.log)
+			reply.XIndex = rf.getLenLog()
 			rf.DPrintf("收到日志信息,日志不对应 len(rf.log)%v", len(rf.log))
 		} else {
-			reply.XTerm = rf.log[args.PrevLogIndex].Term
-			index := args.PrevLogIndex
+			reply.XTerm = rf.log[rf.getNowLogIndex(args.PrevLogIndex)].Term
+			index := rf.getNowLogIndex(args.PrevLogIndex)
 			for {
 				if index == 0 || rf.log[index-1].Term != reply.XTerm {
 					break
 				}
 				index--
 			}
-			reply.XIndex = index
-			rf.DPrintf("收到日志信息,日志不对应两个Term %v %v", rf.log[args.PrevLogIndex].Term, args.PrevLogTerm)
+			reply.XIndex = rf.getAbsolutionLog(index)
+			rf.DPrintf("收到日志信息,日志不对应两个Term %v %v", rf.log[rf.getNowLogIndex(args.PrevLogIndex)].Term, args.PrevLogTerm)
 		}
 		return
 	}
@@ -882,7 +882,7 @@ func (rf *Raft) GetAppendEntries(args *AppendEntries, reply *RequestVoteReply) {
 		rf.votedFor = args.LeaderId
 		rf.currentTetm = args.Term
 		//同步日志
-		logCopy := rf.log[:args.PrevLogIndex+1]
+		logCopy := rf.log[:rf.getNowLogIndex(args.PrevLogIndex+1)]
 		//
 		logCopy = append(logCopy, args.Entrys...)
 		rf.log = make([]LogEntry, len(logCopy))
