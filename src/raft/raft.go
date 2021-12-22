@@ -87,17 +87,31 @@ type Raft struct {
 	//实现快照添加
 	SnaplastIndex int
 	SnaplastTerm  int
+
+	IsSendSnap []bool
 }
 
 //快照需要的辅助反法
 func (rf *Raft) getAbsolutionLog(nowIndex int) int {
-	return nowIndex + rf.SnaplastIndex
+	rf.DPrintf("nowIndex%v+ rf.SnaplastIndex%v", nowIndex, rf.SnaplastIndex)
+	if rf.SnaplastIndex == 0 {
+		return nowIndex
+	}
+	return nowIndex + rf.SnaplastIndex + 1
 }
 func (rf *Raft) getNowLogIndex(Absolution int) int {
-	return Absolution - rf.SnaplastIndex
+	rf.DPrintf("Absolution%v- rf.SnaplastIndex%v", Absolution, rf.SnaplastIndex)
+	if rf.SnaplastIndex == 0 {
+		return Absolution
+	}
+	return Absolution - rf.SnaplastIndex - 1
 }
 func (rf *Raft) getLenLog() int {
-	return len(rf.log) + rf.SnaplastIndex
+	rf.DPrintf("len(rf.log)%v+ rf.SnaplastIndex%v", len(rf.log), rf.SnaplastIndex)
+	if rf.SnaplastIndex == 0 {
+		return len(rf.log)
+	}
+	return len(rf.log) + rf.SnaplastIndex + 1
 }
 
 //日志信息
@@ -148,7 +162,6 @@ func (rf *Raft) persist() {
 // restore previously persisted state.·
 //
 func (rf *Raft) readPersist(data []byte) {
-	rf.DPrintf("反序列化")
 	if data == nil || len(data) < 1 { // bootstrap without any state?
 		return
 	}
@@ -172,6 +185,7 @@ func (rf *Raft) readPersist(data []byte) {
 	d := labgob.NewDecoder(r)
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
+	rf.DPrintf("反序列化")
 	d.Decode(&rf.currentTetm)
 	d.Decode(&rf.votedFor)
 	d.Decode(&rf.log)
@@ -184,10 +198,11 @@ func (rf *Raft) readPersist(data []byte) {
 type RequestVoteArgs struct {
 	// Your data here (2A, 2B).
 	//选举结构
-	Term         int
-	CandidateID  int
-	LastLogIndex int
-	LastLogTerm  int
+	Term          int
+	CandidateID   int
+	LastLogIndex  int
+	LastLogTerm   int
+	LastShopIndex int
 }
 
 //
@@ -220,19 +235,27 @@ type RequestVoteReply struct {
 4.当然还是要判断有没有投过票，主要能不能投票，这里可以通过日志看！！！！！
 */
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
-	rf.DPrintf("收到上面的投票信息 %v,%v", args, reply)
 	// Your code here (2A, 2B).
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
+	rf.DPrintf("收到上面的投票信息 %v,%v", args, reply)
 	voteGranted := 1
 	//日志判断
+	term := rf.SnaplastTerm
 	if len(rf.log) > 0 {
-		if (rf.log[len(rf.log)-1].Term > args.LastLogTerm) ||
-			((rf.log[len(rf.log)-1].Term == args.LastLogTerm) && len(rf.log)-1 > rf.getNowLogIndex(args.LastLogIndex)) {
-			rf.DPrintf("通过日志比较，当前的候选人 %v 无效", args.CandidateID)
-			voteGranted = 0
-		}
+		term = Max(term, rf.log[len(rf.log)-1].Term)
 	}
+
+	if (term > args.LastLogTerm) ||
+		((term == args.LastLogTerm) && rf.getLenLog()-1 > args.LastLogIndex) {
+		rf.DPrintf("通过日志比较，当前的候选人 %v 无效", args.CandidateID)
+		voteGranted = 0
+	}
+
+	//if(args.LastShopIndex < rf.SnaplastIndex){
+	//	rf.DPrintf("快照不对 %v argshop:%v,Rfsnap:%v",args.CandidateID,args.LastShopIndex,rf.SnaplastIndex)
+	//	voteGranted = 0
+	//}
 	if args.Term < rf.currentTetm {
 		rf.DPrintf("来的任期 %v 太久远了，不给你投票", args.CandidateID)
 		reply.Term = rf.currentTetm
@@ -345,6 +368,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	index = rf.getLenLog()
 	term = rf.currentTetm
 	rf.persist()
+	//rf.sendLogAppendEntries(-1)
 	//rf.sendLogAppendEntries()
 	return index, term, isLeader
 }
@@ -403,14 +427,14 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.DPrintf("peers有 %v", len(peers))
 	rf.nextIndex = make([]int, len(peers))
 	rf.matchIndex = make([]int, len(peers))
-
+	rf.IsSendSnap = make([]bool, len(peers))
 	rf.applyCh = applyCh
 	//自己添加的必须有的结构
 	rf.State = "Follower"
 
 	//rf.leader = make(chan int)
 	//初始化快照
-	rf.SnaplastIndex = -1
+	rf.SnaplastIndex = 0
 	rf.SnaplastTerm = -1
 	//此处进行超时等待调用 2
 	if rf.heaterTimer != nil {
@@ -444,9 +468,10 @@ func (rf *Raft) getElection() {
 	rf.votesCount = 1
 	//rf.isVote = true
 	args := RequestVoteArgs{
-		Term:         rf.currentTetm,
-		CandidateID:  rf.me,
-		LastLogIndex: rf.getLenLog() - 1,
+		Term:          rf.currentTetm,
+		CandidateID:   rf.me,
+		LastLogIndex:  rf.getLenLog() - 1,
+		LastShopIndex: rf.SnaplastIndex,
 	}
 	if len(rf.log) > 0 {
 		args.LastLogTerm = rf.log[rf.getNowLogIndex(args.LastLogIndex)].Term
@@ -565,16 +590,15 @@ type InstallSnapshot struct {
 
 func (rf *Raft) sendInstallSnapshot(serverNum int) {
 	rf.DPrintf("发送快照")
-	appendEntries := rf.getAppendEntries(serverNum)
+	//appendEntries := rf.getAppendEntries(serverNum)
 	installSnapshot := InstallSnapshot{
-		Term:          appendEntries.Term,
-		LeaderId:      appendEntries.LeaderId,
+		Term:          rf.currentTetm,
+		LeaderId:      rf.me,
 		SnaplastIndex: rf.SnaplastIndex,
 		SnaplastTerm:  rf.SnaplastTerm,
 		Data:          rf.Persister.ReadSnapshot(),
 	}
 	go func(server int, args InstallSnapshot) {
-		rf.DPrintf("发送同步日志 %v ---> %v , %v", rf.me, server, args)
 		var reply RequestVoteReply
 		flag := rf.sendInstall(server, args, &reply)
 		if !flag {
@@ -582,16 +606,21 @@ func (rf *Raft) sendInstallSnapshot(serverNum int) {
 		}
 		rf.mu.Lock()
 		defer rf.mu.Unlock()
+		rf.DPrintf("发送快照 %v ---> %v , %v", rf.me, server, args)
 		//if rf.currentTetm != args.Term{
 		//	return
 		//}
 		if reply.Term != rf.currentTetm {
 			return
 		}
+		if reply.VoteGranted == 0 {
+			return
+		}
+		rf.DPrintf("发送快照成功 %v ---> %v , %v", rf.me, server, args)
+		rf.IsSendSnap[server] = false
 		rf.nextIndex[server] = args.SnaplastIndex + 1
 		rf.matchIndex[server] = args.SnaplastIndex
 		go rf.CommitLog()
-		//没有发送成功就再次发送
 	}(serverNum, installSnapshot)
 }
 
@@ -603,11 +632,14 @@ func (rf *Raft) Install(args InstallSnapshot, reply *RequestVoteReply) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	//这里会进行抛弃后续，然后下一个append来同步
+	rf.DPrintf("收到快照")
 	reply.Term = rf.currentTetm
 	if args.Term < rf.currentTetm {
 		return
 	}
 	if args.Term > rf.currentTetm {
+		reply.VoteGranted = 0
+		rf.DPrintf("任期不对")
 		rf.electionTimer.Reset(rf.getTimeOut())
 		rf.convertTo("Follower")
 	}
@@ -615,11 +647,13 @@ func (rf *Raft) Install(args InstallSnapshot, reply *RequestVoteReply) {
 		return
 	}
 	//这里就是要看是哪种情况，要么是不够index，要么是超过index
-	if args.SnaplastIndex < rf.getLenLog() {
+	rf.DPrintf("args.SnaplastIndex %v", args.SnaplastIndex)
+	rf.DPrintf("更新快照")
+	if args.SnaplastIndex+1 < rf.getLenLog() {
 		//这里代表的是多余，把后面的内容删除，让下一个append来更新
-		if args.SnaplastTerm == rf.log[rf.getNowLogIndex(rf.SnaplastIndex)].Term {
+		if args.SnaplastTerm == rf.log[rf.getNowLogIndex(args.SnaplastIndex)].Term {
 			//这里说明日志一致，没必要全删
-			rf.log = append(make([]LogEntry, 0), rf.log[args.SnaplastIndex-rf.SnaplastTerm:]...)
+			rf.log = append(make([]LogEntry, 0), rf.log[args.SnaplastIndex-rf.SnaplastIndex:]...)
 		} else {
 			rf.log = make([]LogEntry, 0)
 		}
@@ -629,6 +663,9 @@ func (rf *Raft) Install(args InstallSnapshot, reply *RequestVoteReply) {
 	rf.SnaplastIndex = args.SnaplastIndex
 	rf.SnaplastTerm = args.SnaplastTerm
 	rf.lastApplied = Max(rf.SnaplastIndex, rf.lastApplied)
+	rf.commitIndex = Max(rf.SnaplastIndex, rf.commitIndex)
+	rf.DPrintf("快照成功 %v,%v,%v", rf.SnaplastIndex, rf.SnaplastTerm, rf.lastApplied)
+	reply.VoteGranted = 1
 	rf.encodeRaftSnap(args.Data)
 	msg := ApplyMsg{
 		IsSnap:   true,
@@ -651,17 +688,20 @@ func (rf *Raft) sendLogAppendEntries(serverNum1 int) {
 			if serverNum == rf.me {
 				continue
 			}
-			if rf.nextIndex[serverNum] <= rf.SnaplastIndex {
+			if rf.State != "Leader" {
+				return
+			}
+			rf.DPrintf("next:%v,ser:%v,snap:%v", rf.nextIndex, serverNum, rf.SnaplastIndex)
+			if (rf.nextIndex[serverNum] <= rf.SnaplastIndex && rf.SnaplastIndex != 0) || rf.IsSendSnap[serverNum] {
 				rf.sendInstallSnapshot(serverNum)
 				continue
 			}
 			appendEntries := rf.getAppendEntries(serverNum)
-			if rf.State != "Leader" {
-				return
-			}
 			//发送append
 			go func(server int, args AppendEntries) {
+				rf.mu.Lock()
 				rf.DPrintf("发送同步日志 %v ---> %v , %v", rf.me, server, args)
+				rf.mu.Unlock()
 				var reply RequestVoteReply
 				flag := rf.sendAppendEntries(server, args, &reply)
 				if flag {
@@ -672,13 +712,19 @@ func (rf *Raft) sendLogAppendEntries(serverNum1 int) {
 		}
 	} else {
 		rf.DPrintf("重新发送日志%v ---> %v", rf.me, serverNum1)
-		appendEntries := rf.getAppendEntries(serverNum1)
 		if rf.State != "Leader" {
 			return
 		}
+		if (rf.nextIndex[serverNum1] <= rf.SnaplastIndex && rf.SnaplastIndex != 0) || rf.IsSendSnap[serverNum1] {
+			rf.sendInstallSnapshot(serverNum1)
+			return
+		}
+		appendEntries := rf.getAppendEntries(serverNum1)
 		//发送append
 		go func(server int, args AppendEntries) {
+			rf.mu.Lock()
 			rf.DPrintf("发送同步日志 %v ---> %v , %v", rf.me, server, args)
+			rf.mu.Unlock()
 			var reply RequestVoteReply
 			flag := rf.sendAppendEntries(server, args, &reply)
 			if flag {
@@ -698,8 +744,13 @@ func (rf *Raft) getAppendEntries(serverNum1 int) AppendEntries {
 	}
 	appendEntries.PrevLogIndex = rf.nextIndex[serverNum1] - 1
 	rf.DPrintf("测试 %v", rf.nextIndex)
-	if appendEntries.PrevLogIndex >= 0 {
+	if rf.getNowLogIndex(appendEntries.PrevLogIndex) >= 0 {
 		appendEntries.PrevLogTerm = rf.log[rf.getNowLogIndex(appendEntries.PrevLogIndex)].Term
+	}
+	rf.DPrintf("rf.getNowLogIndex(appendEntries.PrevLogIndex) %v rf.SnaplastTerm %v",
+		rf.getNowLogIndex(appendEntries.PrevLogIndex), rf.SnaplastTerm)
+	if rf.getNowLogIndex(appendEntries.PrevLogIndex) == -1 && rf.SnaplastIndex != 0 {
+		appendEntries.PrevLogTerm = rf.SnaplastTerm
 	}
 	if rf.getNowLogIndex(rf.nextIndex[serverNum1]) < len(rf.log) {
 		appendEntries.Entrys = rf.log[rf.getNowLogIndex(rf.nextIndex[serverNum1]):]
@@ -767,8 +818,9 @@ func (rf *Raft) handleAppendEntries(serverNum int, reply RequestVoteReply, args 
 			rf.DPrintf("rpc过时了")
 			return
 		}
+
 		//重新发送,此处进行优化
-		if reply.XTerm == -1 {
+		if reply.XTerm == -1 || rf.getNowLogIndex(reply.XIndex) < 0 {
 			//此时说明是follower少槽位
 			rf.nextIndex[serverNum] = reply.XIndex
 		} else {
@@ -793,7 +845,7 @@ func (rf *Raft) handleAppendEntries(serverNum int, reply RequestVoteReply, args 
 func (rf *Raft) CommitLog() {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-	if rf.commitIndex > len(rf.log) {
+	if rf.commitIndex > rf.getLenLog() {
 		rf.DPrintf("来的commit不对")
 		return
 	}
@@ -820,12 +872,15 @@ func (rf *Raft) CommitLog() {
 		2.2.2 如果follower这个位置的term <> 来的term,说明有问题,不更新
 */
 func (rf *Raft) GetAppendEntries(args *AppendEntries, reply *RequestVoteReply) {
-	//判断心跳状态
-	//rf.DPrintf("收到心跳 %v",args.CandidateID)
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	//现有条目冲突，就不添加，不冲突就添加
 	reply.Term = rf.currentTetm
+	if rf.getNowLogIndex(args.PrevLogIndex) < 0 {
+		reply.VoteGranted = 0
+		rf.DPrintf("快照后收到日志信息,但是在快照前发送的")
+		return
+	}
 	rf.DPrintf("收到日志信息 %v", args)
 	if rf.currentTetm > args.Term {
 		reply.VoteGranted = 0
@@ -928,14 +983,22 @@ func (rf *Raft) TakeRaftSnapShot(applyRaftLogIndex int, byte2 []byte) {
 	//要进行的工作主要是更新各种参数，然后进行更改
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-
-	index := applyRaftLogIndex - rf.SnaplastIndex
+	index := rf.getNowLogIndex(applyRaftLogIndex)
+	//index := applyRaftLogIndex - rf.SnaplastIndex
 	if applyRaftLogIndex <= rf.SnaplastIndex {
 		return
 	}
 	rf.SnaplastTerm = rf.log[rf.getNowLogIndex(applyRaftLogIndex)].Term
 	rf.SnaplastIndex = applyRaftLogIndex
 	rf.log = append(make([]LogEntry, 0), rf.log[index:]...)
+	rf.lastApplied = Max(rf.SnaplastIndex, rf.lastApplied)
+	//rf.commitIndex = Max(rf.SnaplastIndex, rf.commitIndex)
+	for i := 0; i < len(rf.peers); i++ {
+		if rf.me == i {
+			continue
+		}
+		rf.IsSendSnap[i] = true
+	}
 	rf.encodeRaftSnap(byte2)
 }
 

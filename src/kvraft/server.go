@@ -208,6 +208,10 @@ func (kv *KVServer) waitCommit() {
 	for {
 		select {
 		case msg := <-kv.applyCh:
+			kv.mu.Lock()
+			DPrintf("com:%v", kv.me, msg)
+			kv.applyRaftLogIndex = msg.CommandIndex
+			kv.mu.Unlock()
 			if msg.IsSnap {
 				kv.installSnapshot(msg.SnapShot)
 				continue
@@ -218,15 +222,18 @@ func (kv *KVServer) waitCommit() {
 			requedtId, ok := kv.lastReply[op.ClientId]
 			if op.OpType == "GET" {
 				op.Value = kv.db[op.Key]
+				DPrintf("get到的库 %v", kv.me, kv.db[op.Key])
 			} else {
 				if !ok || op.RequestId > requedtId {
 					switch op.OpType {
 					case "Put":
 						DPrintf("put 写入库", kv.me)
 						kv.db[op.Key] = op.Value
+						DPrintf("put以后的库 %v", kv.me, kv.db[op.Key])
 					case "Append":
 						DPrintf("append 写入库", kv.me)
 						kv.db[op.Key] += op.Value
+						DPrintf("append以后的库 %v", kv.me, kv.db[op.Key])
 					}
 					kv.lastReply[op.ClientId] = op.RequestId
 				}
@@ -247,6 +254,10 @@ func (kv *KVServer) waitCommit() {
 *server层上的快照生成
  */
 func (kv *KVServer) takeSnapshot() {
+	_, isleade := kv.rf.GetState()
+	if !isleade {
+		return
+	}
 	w := new(bytes.Buffer)
 	e := labgob.NewEncoder(w)
 	kv.mu.Lock()
@@ -255,7 +266,7 @@ func (kv *KVServer) takeSnapshot() {
 	applyRaftLogIndex := kv.applyRaftLogIndex
 	kv.mu.Unlock()
 	//同步到raft层
-	kv.rf.TakeRaftSnapShot(applyRaftLogIndex, w.Bytes())
+	kv.rf.TakeRaftSnapShot(applyRaftLogIndex-1, w.Bytes())
 }
 
 /*
