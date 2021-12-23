@@ -368,8 +368,9 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	index = rf.getLenLog()
 	term = rf.currentTetm
 	rf.persist()
-	//rf.sendLogAppendEntries(-1)
-	//rf.sendLogAppendEntries()
+	//if rf.State == "Leader" {
+	//	rf.sendLogAppendEntries(-1)
+	//}
 	return index, term, isLeader
 }
 
@@ -524,6 +525,7 @@ func (rf *Raft) setReplyVote(reply RequestVoteReply, server int) {
 				if i == rf.me {
 					continue
 				}
+				rf.IsSendSnap[i] = false
 				//DPrintf("nextindex的长度 %v",len(rf.nextIndex))9
 				//DPrintf("nextindex的长度 %v",len(rf.nextIndex))9
 				rf.nextIndex[i] = rf.getLenLog()
@@ -600,6 +602,9 @@ func (rf *Raft) sendInstallSnapshot(serverNum int) {
 	}
 	go func(server int, args InstallSnapshot) {
 		var reply RequestVoteReply
+		rf.mu.Lock()
+		rf.DPrintf("发送快照 %v ---> %v , %v", rf.me, server, args)
+		rf.mu.Unlock()
 		flag := rf.sendInstall(server, args, &reply)
 		if !flag {
 			return
@@ -653,7 +658,9 @@ func (rf *Raft) Install(args InstallSnapshot, reply *RequestVoteReply) {
 		//这里代表的是多余，把后面的内容删除，让下一个append来更新
 		if args.SnaplastTerm == rf.log[rf.getNowLogIndex(args.SnaplastIndex)].Term {
 			//这里说明日志一致，没必要全删
-			rf.log = append(make([]LogEntry, 0), rf.log[args.SnaplastIndex-rf.SnaplastIndex:]...)
+			rf.DPrintf("rf.getNowLogIndex %v,%v", rf.getNowLogIndex(args.SnaplastIndex),
+				rf.log[rf.getNowLogIndex(args.SnaplastIndex)])
+			rf.log = append(make([]LogEntry, 0), rf.log[rf.getNowLogIndex(args.SnaplastIndex)+1:]...)
 		} else {
 			rf.log = make([]LogEntry, 0)
 		}
@@ -875,13 +882,13 @@ func (rf *Raft) GetAppendEntries(args *AppendEntries, reply *RequestVoteReply) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	//现有条目冲突，就不添加，不冲突就添加
+	rf.DPrintf("收到日志信息 %v", args)
 	reply.Term = rf.currentTetm
-	if rf.getNowLogIndex(args.PrevLogIndex) < 0 {
+	if rf.getNowLogIndex(args.PrevLogIndex) < -1 {
 		reply.VoteGranted = 0
 		rf.DPrintf("快照后收到日志信息,但是在快照前发送的")
 		return
 	}
-	rf.DPrintf("收到日志信息 %v", args)
 	if rf.currentTetm > args.Term {
 		reply.VoteGranted = 0
 		//说明这个leader无效,好像什么都不用干,因为下面会变
@@ -983,6 +990,7 @@ func (rf *Raft) TakeRaftSnapShot(applyRaftLogIndex int, byte2 []byte) {
 	//要进行的工作主要是更新各种参数，然后进行更改
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
+	rf.DPrintf("raft kuaizhao")
 	index := rf.getNowLogIndex(applyRaftLogIndex)
 	//index := applyRaftLogIndex - rf.SnaplastIndex
 	if applyRaftLogIndex <= rf.SnaplastIndex {
@@ -990,7 +998,7 @@ func (rf *Raft) TakeRaftSnapShot(applyRaftLogIndex int, byte2 []byte) {
 	}
 	rf.SnaplastTerm = rf.log[rf.getNowLogIndex(applyRaftLogIndex)].Term
 	rf.SnaplastIndex = applyRaftLogIndex
-	rf.log = append(make([]LogEntry, 0), rf.log[index:]...)
+	rf.log = append(make([]LogEntry, 0), rf.log[index+1:]...)
 	rf.lastApplied = Max(rf.SnaplastIndex, rf.lastApplied)
 	//rf.commitIndex = Max(rf.SnaplastIndex, rf.commitIndex)
 	for i := 0; i < len(rf.peers); i++ {

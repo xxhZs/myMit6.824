@@ -122,6 +122,16 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	reply.IsLeader = true
 
 	//这里要不要判断重复呢？
+	//kv.mu.Lock()
+	//lastReply, ok := kv.lastReply[args.ClientId]
+	//if ok && lastReply > args.RequestId {
+	//	DPrintf("指令过期%v,%v", kv.me, lastReply, args.RequestId)
+	//	reply.Err = ErrWrongLeader
+	//	reply.IsLeader = false
+	//	kv.mu.Unlock()
+	//	return
+	//}
+	//kv.mu.Unlock()
 	commod := Op{
 		Key:       args.Key,
 		Value:     args.Value,
@@ -208,10 +218,6 @@ func (kv *KVServer) waitCommit() {
 	for {
 		select {
 		case msg := <-kv.applyCh:
-			kv.mu.Lock()
-			DPrintf("com:%v", kv.me, msg)
-			kv.applyRaftLogIndex = msg.CommandIndex
-			kv.mu.Unlock()
 			if msg.IsSnap {
 				kv.installSnapshot(msg.SnapShot)
 				continue
@@ -219,6 +225,8 @@ func (kv *KVServer) waitCommit() {
 			op := msg.Command.(Op)
 			DPrintf("收到提交 Op%v", kv.me, op)
 			kv.mu.Lock()
+			DPrintf("com:%v", kv.me, msg)
+			kv.applyRaftLogIndex = msg.CommandIndex
 			requedtId, ok := kv.lastReply[op.ClientId]
 			if op.OpType == "GET" {
 				op.Value = kv.db[op.Key]
