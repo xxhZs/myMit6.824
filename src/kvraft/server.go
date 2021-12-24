@@ -49,6 +49,7 @@ type KVServer struct {
 	//实现快照
 	applyRaftLogIndex int
 	Persister         *raft.Persister
+	killCh            chan int
 }
 
 func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
@@ -120,18 +121,6 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 		return
 	}
 	reply.IsLeader = true
-
-	//这里要不要判断重复呢？
-	//kv.mu.Lock()
-	//lastReply, ok := kv.lastReply[args.ClientId]
-	//if ok && lastReply > args.RequestId {
-	//	DPrintf("指令过期%v,%v", kv.me, lastReply, args.RequestId)
-	//	reply.Err = ErrWrongLeader
-	//	reply.IsLeader = false
-	//	kv.mu.Unlock()
-	//	return
-	//}
-	//kv.mu.Unlock()
 	commod := Op{
 		Key:       args.Key,
 		Value:     args.Value,
@@ -161,6 +150,7 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 func (kv *KVServer) Kill() {
 	atomic.StoreInt32(&kv.dead, 1)
 	kv.rf.Kill()
+	kv.killCh <- 1
 	// Your code here, if desired.
 }
 
@@ -199,6 +189,7 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 
 	// You may need initialization code here.
 	kv.chMap = make(map[int]chan Op)
+	kv.killCh = make(chan int)
 	kv.db = make(map[string]string)
 	kv.lastReply = make(map[int64]int)
 	//初始化shop
@@ -254,6 +245,8 @@ func (kv *KVServer) waitCommit() {
 			}
 			opCh <- op
 			kv.mu.Unlock()
+		case <-kv.killCh:
+			return
 		}
 	}
 }

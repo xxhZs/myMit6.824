@@ -12,6 +12,9 @@ import "math/big"
 type Clerk struct {
 	servers []*labrpc.ClientEnd
 	// Your data here.
+	lastLeader int
+	ClientId   int64
+	RequestId  int
 }
 
 func nrand() int64 {
@@ -25,13 +28,19 @@ func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 	ck := new(Clerk)
 	ck.servers = servers
 	// Your code here.
+	ck.RequestId = 0
+	ck.lastLeader = 0
+	ck.ClientId = nrand()
 	return ck
 }
 
 func (ck *Clerk) Query(num int) Config {
 	args := &QueryArgs{}
 	// Your code here.
+	requestId := ck.RequestId + 1
 	args.Num = num
+	args.RequestId = ck.RequestId
+	args.Cid = nrand()
 	for {
 		// try each known server.
 		for _, srv := range ck.servers {
@@ -41,6 +50,8 @@ func (ck *Clerk) Query(num int) Config {
 				return reply.Config
 			}
 		}
+		ck.lastLeader = (ck.lastLeader + 1) % len(ck.servers)
+		ck.RequestId = requestId
 		time.Sleep(100 * time.Millisecond)
 	}
 }
@@ -49,7 +60,9 @@ func (ck *Clerk) Join(servers map[int][]string) {
 	args := &JoinArgs{}
 	// Your code here.
 	args.Servers = servers
-
+	args.RequestId = ck.RequestId
+	ck.RequestId++
+	args.Cid = nrand()
 	for {
 		// try each known server.
 		for _, srv := range ck.servers {
@@ -59,6 +72,7 @@ func (ck *Clerk) Join(servers map[int][]string) {
 				return
 			}
 		}
+		ck.lastLeader = (ck.lastLeader + 1) % len(ck.servers)
 		time.Sleep(100 * time.Millisecond)
 	}
 }
@@ -67,7 +81,9 @@ func (ck *Clerk) Leave(gids []int) {
 	args := &LeaveArgs{}
 	// Your code here.
 	args.GIDs = gids
-
+	args.RequestId = ck.RequestId
+	ck.RequestId++
+	args.Cid = nrand()
 	for {
 		// try each known server.
 		for _, srv := range ck.servers {
@@ -77,6 +93,7 @@ func (ck *Clerk) Leave(gids []int) {
 				return
 			}
 		}
+		ck.lastLeader = (ck.lastLeader + 1) % len(ck.servers)
 		time.Sleep(100 * time.Millisecond)
 	}
 }
@@ -86,7 +103,9 @@ func (ck *Clerk) Move(shard int, gid int) {
 	// Your code here.
 	args.Shard = shard
 	args.GID = gid
-
+	args.RequestId = ck.RequestId
+	args.Cid = nrand()
+	ck.RequestId++
 	for {
 		// try each known server.
 		for _, srv := range ck.servers {
@@ -96,6 +115,7 @@ func (ck *Clerk) Move(shard int, gid int) {
 				return
 			}
 		}
+		ck.lastLeader = (ck.lastLeader + 1) % len(ck.servers)
 		time.Sleep(100 * time.Millisecond)
 	}
 }

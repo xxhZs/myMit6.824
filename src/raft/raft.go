@@ -860,12 +860,13 @@ func (rf *Raft) CommitLog() {
 	rf.DPrintf("日志提交, lastApplied %v , commitIndex %v", rf.lastApplied, rf.commitIndex)
 	for i := rf.lastApplied + 1; i <= rf.commitIndex; i++ { //commit日志到与Leader相同
 		// 很重要的是要index要加1 因为计算的过程start返回的下标不是以0开始的
-		rf.DPrintf("日志提交, %v", i)
+		rf.DPrintf("日志提交, %v %v", i, rf.log[rf.getNowLogIndex(i)])
 		rf.applyCh <- ApplyMsg{
 			CommandIndex: i + 1,
 			Command:      rf.log[rf.getNowLogIndex(i)].Command,
 			CommandValid: true,
 		}
+		rf.DPrintf("日志提交完成, %v %v", i, rf.log[rf.getNowLogIndex(i)])
 	}
 	rf.lastApplied = rf.commitIndex
 }
