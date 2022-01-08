@@ -10,7 +10,7 @@ import "6.824lab/labrpc"
 import "sync"
 import "6.824lab/labgob"
 
-const Debug = 1
+const Debug = 0
 
 func DPrintf(format string, kvId int, a ...interface{}) (n int, err error) {
 	if Debug > 0 {
@@ -186,7 +186,7 @@ func (sm *ShardMaster) waitCommit() {
 			sm.mu.Lock()
 			DPrintf("收到op %v", sm.me, op)
 			requedtId, ok := sm.lastReply[op.Cid]
-			DPrintf("%v,%v,%v", sm.me, requedtId, ok)
+			DPrintf("%v,%v", sm.me, requedtId, ok)
 			sm.mu.Unlock()
 			if (!ok || op.RequestID > requedtId) && op.OpType != "Query" {
 				DPrintf("更改config", sm.me)

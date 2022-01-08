@@ -705,17 +705,17 @@ func (rf *Raft) sendLogAppendEntries(serverNum1 int) {
 			}
 			appendEntries := rf.getAppendEntries(serverNum)
 			//发送append
-			go func(server int, args AppendEntries) {
+			go func(server int, args *AppendEntries) {
 				rf.mu.Lock()
 				rf.DPrintf("发送同步日志 %v ---> %v , %v", rf.me, server, args)
 				rf.mu.Unlock()
 				var reply RequestVoteReply
 				flag := rf.sendAppendEntries(server, args, &reply)
 				if flag {
-					rf.handleAppendEntries(server, reply, args)
+					rf.handleAppendEntries(server, reply, *args)
 				}
 				//没有发送成功就再次发送
-			}(serverNum, appendEntries)
+			}(serverNum, &appendEntries)
 		}
 	} else {
 		rf.DPrintf("重新发送日志%v ---> %v", rf.me, serverNum1)
@@ -728,18 +728,18 @@ func (rf *Raft) sendLogAppendEntries(serverNum1 int) {
 		}
 		appendEntries := rf.getAppendEntries(serverNum1)
 		//发送append
-		go func(server int, args AppendEntries) {
+		go func(server int, args *AppendEntries) {
 			rf.mu.Lock()
 			rf.DPrintf("发送同步日志 %v ---> %v , %v", rf.me, server, args)
 			rf.mu.Unlock()
 			var reply RequestVoteReply
 			flag := rf.sendAppendEntries(server, args, &reply)
 			if flag {
-				rf.handleAppendEntries(server, reply, args)
+				rf.handleAppendEntries(server, reply, *args)
 			}
 			//没有发送成功就再次发送
 			//rf.DPrintf("重新发送日志%v ---> %v", rf.me, server)
-		}(serverNum1, appendEntries)
+		}(serverNum1, &appendEntries)
 	}
 
 }
@@ -765,9 +765,9 @@ func (rf *Raft) getAppendEntries(serverNum1 int) AppendEntries {
 	return appendEntries
 }
 
-func (rf *Raft) sendAppendEntries(server int, args AppendEntries, reply *RequestVoteReply) bool {
+func (rf *Raft) sendAppendEntries(server int, args *AppendEntries, reply *RequestVoteReply) bool {
 	//
-	ok := rf.peers[server].Call("Raft.GetAppendEntries", &args, reply)
+	ok := rf.peers[server].Call("Raft.GetAppendEntries", args, reply)
 	return ok
 }
 func (rf *Raft) handleAppendEntries(serverNum int, reply RequestVoteReply, args AppendEntries) {
