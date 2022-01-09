@@ -10,7 +10,7 @@ import "6.824lab/labrpc"
 import "sync"
 import "6.824lab/labgob"
 
-const Debug = 0
+const Debug = 1
 
 func DPrintf(format string, kvId int, a ...interface{}) (n int, err error) {
 	if Debug > 0 {
@@ -32,6 +32,7 @@ type ShardMaster struct {
 	configs   []Config // indexed by config num
 	lastReply map[int64]int
 	chMap     map[int]chan Op
+	killCh    chan int
 }
 type Op struct {
 	// Your data here.
@@ -141,6 +142,7 @@ func (sm *ShardMaster) isLeader() bool {
 //
 func (sm *ShardMaster) Kill() {
 	sm.rf.Kill()
+	sm.killCh <- 1
 	// Your code here, if desired.
 }
 
@@ -172,6 +174,7 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister)
 
 	sm.chMap = make(map[int]chan Op)
 	sm.lastReply = make(map[int64]int)
+	sm.killCh = make(chan int)
 	go sm.waitCommit()
 	// Your code here.
 
@@ -181,6 +184,8 @@ func (sm *ShardMaster) waitCommit() {
 	DPrintf("循环获取raft的提交", sm.me)
 	for {
 		select {
+		case <-sm.killCh:
+			return
 		case msg := <-sm.applyCh:
 			op := msg.Command.(Op)
 			sm.mu.Lock()
@@ -204,6 +209,8 @@ func (sm *ShardMaster) waitCommit() {
 	}
 }
 func (sm *ShardMaster) updateConfig(op Op) {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
 	cfg := sm.crateNextconfig()
 	switch op.OpType {
 	case "Join":
@@ -240,15 +247,14 @@ func (sm *ShardMaster) balanceGroup(cfg *Config, types string, gid int) {
 	switch types {
 	case "Join":
 		avg := NShards / len(cfg.Groups)
-		DPrintf("负载均衡后join %v", sm.me, cfg)
 		for i := 0; i < avg; i++ {
 			//把最大的块的gid的share给最新的gid
 			maxGid := sm.getMaxShardGid(shardCount)
 			cfg.Shards[shardCount[maxGid][0]] = gid
 			shardCount[maxGid] = shardCount[maxGid][1:]
 		}
+		DPrintf("负载均衡后join %v", sm.me, cfg)
 	case "Leave":
-		DPrintf("负载均衡后leave %v", sm.me, cfg)
 		shareList, ok := shardCount[gid]
 		if !ok {
 			return
@@ -263,6 +269,7 @@ func (sm *ShardMaster) balanceGroup(cfg *Config, types string, gid int) {
 			cfg.Shards[v] = minGid
 			shardCount[minGid] = append(shardCount[minGid], v)
 		}
+		DPrintf("负载均衡后leave %v", sm.me, cfg)
 	}
 
 }

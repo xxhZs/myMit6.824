@@ -259,6 +259,7 @@ func (cfg *config) StartServer(gi int, i int) {
 }
 
 func (cfg *config) StartGroup(gi int) {
+	fmt.Println("启动520", gi)
 	for i := 0; i < cfg.n; i++ {
 		cfg.StartServer(gi, i)
 	}

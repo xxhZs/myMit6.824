@@ -221,6 +221,7 @@ func (kv *KVServer) waitCommit() {
 			requedtId, ok := kv.lastReply[op.ClientId]
 			if op.OpType == "GET" {
 				op.Value = kv.db[op.Key]
+				kv.lastReply[op.ClientId] = op.RequestId
 				DPrintf("get到的库 %v", kv.me, kv.db[op.Key])
 			} else {
 				if !ok || op.RequestId > requedtId {

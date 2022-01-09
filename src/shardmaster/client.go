@@ -40,7 +40,7 @@ func (ck *Clerk) Query(num int) Config {
 	requestId := ck.RequestId + 1
 	args.Num = num
 	args.RequestId = ck.RequestId
-	args.Cid = nrand()
+	args.Cid = ck.ClientId
 	for {
 		// try each known server.
 		for _, srv := range ck.servers {
@@ -62,7 +62,7 @@ func (ck *Clerk) Join(servers map[int][]string) {
 	args.Servers = servers
 	args.RequestId = ck.RequestId
 	ck.RequestId++
-	args.Cid = nrand()
+	args.Cid = ck.ClientId
 	for {
 		// try each known server.
 		for _, srv := range ck.servers {

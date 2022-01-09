@@ -248,7 +248,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 
 	if (term > args.LastLogTerm) ||
 		((term == args.LastLogTerm) && rf.getLenLog()-1 > args.LastLogIndex) {
-		rf.DPrintf("通过日志比较，当前的候选人 %v 无效", args.CandidateID)
+		rf.DPrintf("通过日志比较，当前的候选人 %v 无效 term%v", args.CandidateID, term)
 		voteGranted = 0
 	}
 
@@ -473,9 +473,10 @@ func (rf *Raft) getElection() {
 		CandidateID:   rf.me,
 		LastLogIndex:  rf.getLenLog() - 1,
 		LastShopIndex: rf.SnaplastIndex,
+		LastLogTerm:   rf.SnaplastTerm,
 	}
 	if len(rf.log) > 0 {
-		args.LastLogTerm = rf.log[rf.getNowLogIndex(args.LastLogIndex)].Term
+		args.LastLogTerm = Max(rf.log[rf.getNowLogIndex(args.LastLogIndex)].Term, args.LastLogTerm)
 	}
 	//此处进行发送选举
 	for serverNum := 0; serverNum < len(rf.peers); serverNum++ {
@@ -643,10 +644,13 @@ func (rf *Raft) Install(args InstallSnapshot, reply *RequestVoteReply) {
 		return
 	}
 	if args.Term > rf.currentTetm {
-		reply.VoteGranted = 0
-		rf.DPrintf("任期不对")
 		rf.electionTimer.Reset(rf.getTimeOut())
 		rf.convertTo("Follower")
+		rf.currentTetm = args.Term
+		rf.votedFor = args.LeaderId
+		reply.VoteGranted = 0
+		rf.DPrintf("任期不对")
+		rf.persist()
 	}
 	if args.SnaplastIndex <= rf.SnaplastIndex {
 		return
@@ -933,9 +937,9 @@ func (rf *Raft) GetAppendEntries(args *AppendEntries, reply *RequestVoteReply) {
 				rf.commitIndex = args.LeaderCommit
 			}
 			reply.VoteGranted = 2
+			rf.convertTo("Follower")
 			rf.currentTetm = args.Term
 			rf.votedFor = args.LeaderId
-			rf.convertTo("Follower")
 			go rf.CommitLog()
 			rf.persist()
 		}
@@ -1023,4 +1027,13 @@ func (rf *Raft) encodeRaftSnap(byte2 []byte) {
 	e.Encode(rf.SnaplastTerm)
 	e.Encode(rf.SnaplastIndex)
 	rf.Persister.SaveStateAndSnapshot(w.Bytes(), byte2)
+}
+
+func (rf *Raft) HasCurrentTermInLog() bool {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	if (len(rf.log) - 1) > 0 {
+		return rf.log[len(rf.log)-1].Term == rf.currentTetm
+	}
+	return true
 }

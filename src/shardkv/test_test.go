@@ -40,6 +40,7 @@ func TestStaticShards(t *testing.T) {
 	for i := 0; i < n; i++ {
 		ka[i] = strconv.Itoa(i) // ensure multiple shards
 		va[i] = randstring(20)
+		//fmt.Println("11111545")
 		ck.Put(ka[i], va[i])
 	}
 	for i := 0; i < n; i++ {
@@ -96,7 +97,6 @@ func TestJoinLeave(t *testing.T) {
 	ck := cfg.makeClient()
 
 	cfg.join(0)
-
 	n := 10
 	ka := make([]string, n)
 	va := make([]string, n)
@@ -110,7 +110,7 @@ func TestJoinLeave(t *testing.T) {
 	}
 
 	cfg.join(1)
-
+	//fmt.Println("join 1 ")
 	for i := 0; i < n; i++ {
 		check(t, ck, ka[i], va[i])
 		x := randstring(5)
@@ -168,6 +168,7 @@ func TestSnapshot(t *testing.T) {
 
 	for i := 0; i < n; i++ {
 		check(t, ck, ka[i], va[i])
+		//
 		x := randstring(20)
 		ck.Append(ka[i], x)
 		va[i] += x
@@ -240,6 +241,7 @@ func TestMissChange(t *testing.T) {
 	cfg.leave(1)
 	cfg.leave(0)
 
+	fmt.Printf("11111225")
 	for i := 0; i < n; i++ {
 		check(t, ck, ka[i], va[i])
 		x := randstring(20)
@@ -299,7 +301,7 @@ func TestConcurrent1(t *testing.T) {
 
 	cfg := make_config(t, 3, false, 100)
 	defer cfg.cleanup()
-
+	fmt.Printf("xxh1")
 	ck := cfg.makeClient()
 
 	cfg.join(0)
@@ -307,12 +309,13 @@ func TestConcurrent1(t *testing.T) {
 	n := 10
 	ka := make([]string, n)
 	va := make([]string, n)
+	fmt.Printf("xxh2")
 	for i := 0; i < n; i++ {
 		ka[i] = strconv.Itoa(i) // ensure multiple shards
 		va[i] = randstring(5)
 		ck.Put(ka[i], va[i])
 	}
-
+	fmt.Printf("xxh3")
 	var done int32
 	ch := make(chan bool)
 
@@ -327,6 +330,7 @@ func TestConcurrent1(t *testing.T) {
 		}
 	}
 
+	fmt.Printf("xxh4")
 	for i := 0; i < n; i++ {
 		go ff(i)
 	}
@@ -338,32 +342,33 @@ func TestConcurrent1(t *testing.T) {
 	time.Sleep(500 * time.Millisecond)
 	cfg.leave(0)
 
+	fmt.Printf("xxh5")
 	cfg.ShutdownGroup(0)
 	time.Sleep(100 * time.Millisecond)
 	cfg.ShutdownGroup(1)
 	time.Sleep(100 * time.Millisecond)
 	cfg.ShutdownGroup(2)
-
+	fmt.Printf("xxh6")
 	cfg.leave(2)
 
 	time.Sleep(100 * time.Millisecond)
 	cfg.StartGroup(0)
 	cfg.StartGroup(1)
 	cfg.StartGroup(2)
-
+	fmt.Printf("xxh7")
 	time.Sleep(100 * time.Millisecond)
 	cfg.join(0)
 	cfg.leave(1)
 	time.Sleep(500 * time.Millisecond)
 	cfg.join(1)
-
+	fmt.Printf("xxh8")
 	time.Sleep(1 * time.Second)
 
 	atomic.StoreInt32(&done, 1)
 	for i := 0; i < n; i++ {
 		<-ch
 	}
-
+	fmt.Printf("xxh9")
 	for i := 0; i < n; i++ {
 		check(t, ck, ka[i], va[i])
 	}
@@ -938,4 +943,34 @@ func TestChallenge2Partial(t *testing.T) {
 	}
 
 	fmt.Printf("  ... Passed\n")
+}
+
+type sj struct {
+	a52 chan int
+}
+
+func TestChall(t *testing.T) {
+	sj := sj{a52: make(chan int)}
+	go sj.aasa(t, "")
+	go sj.aasa(t, "")
+	go sj.aasa(t, "")
+	go sj.aasa(t, "")
+	time.Sleep(10 * time.Millisecond)
+	close(sj.a52)
+	Dprint("555")
+	time.Sleep(10000 * time.Millisecond)
+}
+func (sj *sj) aasa(t *testing.T, value string) {
+	for {
+		select {
+		case <-sj.a52:
+			Dprint("1")
+			return
+		default:
+			Dprint("111")
+		}
+	}
+}
+func Dprint(a12 string) {
+	fmt.Printf(a12)
 }

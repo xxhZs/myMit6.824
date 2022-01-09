@@ -60,8 +60,8 @@ type ConfigMsgReply struct {
 	Err       Err
 	ConfigNum int
 	Shards    []int
-	DB        []map[string]string
-	Cid2Seq   []map[int64]int
+	DB        map[int]map[string]string
+	Cid2Seq   map[int]map[int64]int
 }
 type CommandResponse struct {
 	Err string
