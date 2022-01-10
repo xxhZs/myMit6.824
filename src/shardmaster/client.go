@@ -15,6 +15,7 @@ type Clerk struct {
 	lastLeader int
 	ClientId   int64
 	RequestId  int
+	leaderID   int
 }
 
 func nrand() int64 {
@@ -43,12 +44,16 @@ func (ck *Clerk) Query(num int) Config {
 	args.Cid = ck.ClientId
 	for {
 		// try each known server.
-		for _, srv := range ck.servers {
+		leaderId := ck.leaderID
+		for si := 0; si < len(ck.servers); si++ {
+			srv := ck.servers[leaderId]
 			var reply QueryReply
 			ok := srv.Call("ShardMaster.Query", args, &reply)
 			if ok && reply.WrongLeader == false {
+				ck.leaderID = leaderId
 				return reply.Config
 			}
+			leaderId = (leaderId + 1) % len(ck.servers)
 		}
 		ck.lastLeader = (ck.lastLeader + 1) % len(ck.servers)
 		ck.RequestId = requestId
@@ -65,12 +70,16 @@ func (ck *Clerk) Join(servers map[int][]string) {
 	args.Cid = ck.ClientId
 	for {
 		// try each known server.
-		for _, srv := range ck.servers {
+		leaderId := ck.leaderID
+		for si := 0; si < len(ck.servers); si++ {
+			srv := ck.servers[leaderId]
 			var reply JoinReply
 			ok := srv.Call("ShardMaster.Join", args, &reply)
 			if ok && reply.WrongLeader == false {
+				ck.leaderID = leaderId
 				return
 			}
+			leaderId = (leaderId + 1) % len(ck.servers)
 		}
 		ck.lastLeader = (ck.lastLeader + 1) % len(ck.servers)
 		time.Sleep(100 * time.Millisecond)
@@ -86,12 +95,16 @@ func (ck *Clerk) Leave(gids []int) {
 	args.Cid = nrand()
 	for {
 		// try each known server.
-		for _, srv := range ck.servers {
+		leaderId := ck.leaderID
+		for si := 0; si < len(ck.servers); si++ {
+			srv := ck.servers[leaderId]
 			var reply LeaveReply
 			ok := srv.Call("ShardMaster.Leave", args, &reply)
 			if ok && reply.WrongLeader == false {
+				ck.leaderID = leaderId
 				return
 			}
+			leaderId = (leaderId + 1) % len(ck.servers)
 		}
 		ck.lastLeader = (ck.lastLeader + 1) % len(ck.servers)
 		time.Sleep(100 * time.Millisecond)
@@ -108,12 +121,16 @@ func (ck *Clerk) Move(shard int, gid int) {
 	ck.RequestId++
 	for {
 		// try each known server.
-		for _, srv := range ck.servers {
+		leaderId := ck.leaderID
+		for si := 0; si < len(ck.servers); si++ {
+			srv := ck.servers[leaderId]
 			var reply MoveReply
 			ok := srv.Call("ShardMaster.Move", args, &reply)
 			if ok && reply.WrongLeader == false {
+				ck.leaderID = leaderId
 				return
 			}
+			leaderId = (leaderId + 1) % len(ck.servers)
 		}
 		ck.lastLeader = (ck.lastLeader + 1) % len(ck.servers)
 		time.Sleep(100 * time.Millisecond)

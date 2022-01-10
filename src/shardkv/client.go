@@ -46,6 +46,7 @@ type Clerk struct {
 	RequestId int
 
 	// You will have to modify this struct.
+	gidLeader map[int]int
 }
 
 //
@@ -63,6 +64,7 @@ func MakeClerk(masters []*labrpc.ClientEnd, make_end func(string) *labrpc.Client
 	ck.make_end = make_end
 	ck.cid = nrand()
 	ck.RequestId = 0
+	ck.gidLeader = make(map[int]int)
 	// You'll have to add code here.
 	return ck
 }
@@ -84,20 +86,31 @@ func (ck *Clerk) Get(key string) string {
 		args.ClientId = ck.cid
 		args.RequestId = requresId
 		gid := ck.config.Shards[shard]
+		if _, ok := ck.gidLeader[gid]; !ok {
+			ck.gidLeader[gid] = 0
+		}
 		if servers, ok := ck.config.Groups[gid]; ok {
 			// try each server for the shard.
+			flag := 0
+			leaderId := ck.gidLeader[gid]
 			for si := 0; si < len(servers); si++ {
-				srv := ck.make_end(servers[si])
+				srv := ck.make_end(servers[leaderId])
 				var reply GetReply
 				ok := srv.Call("ShardKV.Get", &args, &reply)
 				if ok && (reply.Err == OK || reply.Err == ErrNoKey) {
+					ck.gidLeader[gid] = leaderId
 					ck.RequestId = requresId
 					return reply.Value
 				}
 				if ok && (reply.Err == ErrWrongGroup) {
 					break
 				}
+				flag++
+				if flag > 20 {
+					break
+				}
 				// ... not ok, or ErrWrongLeader
+				leaderId = (leaderId + 1) % len(servers)
 			}
 		}
 		time.Sleep(100 * time.Millisecond)
@@ -125,11 +138,16 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 		args.ConfigNum = ck.config.Num
 		args.ClientId = ck.cid
 		args.RequestId = requresId
+		if _, ok := ck.gidLeader[gid]; !ok {
+			ck.gidLeader[gid] = 0
+		}
 		if servers, ok := ck.config.Groups[gid]; ok {
 			flag := 0
+			leaderId := ck.gidLeader[gid]
 			for si := 0; si < len(servers); si++ {
-				srv := ck.make_end(servers[si])
+				srv := ck.make_end(servers[leaderId])
 				var reply PutAppendReply
+				fmt.Println("成功mm125", args, reply, ok)
 				ok := srv.Call("ShardKV.PutAppend", &args, &reply)
 				fmt.Println("成功mm ", args, reply, ok)
 				if ok && (reply.Err == OK || reply.Err == ErrNoKey) {
@@ -143,6 +161,7 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 				if flag > 20 {
 					break
 				}
+				leaderId = (leaderId + 1) % len(servers)
 				// ... not ok, or ErrWrongLeader
 			}
 		}

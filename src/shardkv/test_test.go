@@ -1,6 +1,10 @@
 package shardkv
 
-import "6.824lab/porcupine"
+import (
+	"6.824lab/labgob"
+	"6.824lab/porcupine"
+	"bytes"
+)
 import "6.824lab/models"
 import "testing"
 import "strconv"
@@ -945,32 +949,75 @@ func TestChallenge2Partial(t *testing.T) {
 	fmt.Printf("  ... Passed\n")
 }
 
-type sj struct {
-	a52 chan int
+type Sj struct {
+	aaa map[int]int
+	bbb string
+	ccc map[int]int
 }
 
 func TestChall(t *testing.T) {
-	sj := sj{a52: make(chan int)}
-	go sj.aasa(t, "")
-	go sj.aasa(t, "")
-	go sj.aasa(t, "")
-	go sj.aasa(t, "")
-	time.Sleep(10 * time.Millisecond)
-	close(sj.a52)
-	Dprint("555")
-	time.Sleep(10000 * time.Millisecond)
+	take(t)
 }
-func (sj *sj) aasa(t *testing.T, value string) {
-	for {
-		select {
-		case <-sj.a52:
-			Dprint("1")
-			return
-		default:
-			Dprint("111")
-		}
+func take(t *testing.T) {
+	w := new(bytes.Buffer)
+	e := labgob.NewEncoder(w)
+	sj := Sj{
+		aaa: make(map[int]int),
+		bbb: "1",
+		ccc: make(map[int]int),
 	}
+	sj.aaa[3] = 3
+	fmt.Printf("sj1%v \n", sj)
+	e.Encode(sj.aaa)
+	e.Encode(sj.bbb)
+	e.Encode(sj.ccc)
+
+	sj1 := Sj{
+		aaa: make(map[int]int),
+		bbb: "1",
+		ccc: make(map[int]int),
+	}
+	sj1.aaa[1] = 1
+	sj1.ccc[2] = 2
+	fmt.Printf("sj1原来%v \n", sj1)
+	r := bytes.NewBuffer(w.Bytes())
+	d := labgob.NewDecoder(r)
+	var aaa, ccc map[int]int
+	var bbb string
+	if d.Decode(aaa) != nil ||
+		d.Decode(bbb) != nil ||
+		d.Decode(ccc) != nil {
+		fmt.Printf("ajsfhsakj \n")
+	} else {
+		sj1.aaa = aaa
+		sj1.bbb = bbb
+		sj1.ccc = ccc
+	}
+	fmt.Printf("sj%v \n", sj1)
 }
-func Dprint(a12 string) {
-	fmt.Printf(a12)
-}
+
+//func TestChall(t *testing.T) {
+//	sj := sj{a52: make(chan int)}
+//	go sj.aasa(t, "")
+//	go sj.aasa(t, "")
+//	go sj.aasa(t, "")
+//	go sj.aasa(t, "")
+//	time.Sleep(10 * time.Millisecond)
+//	close(sj.a52)
+//	Dprint("555")
+//	time.Sleep(10000 * time.Millisecond)
+//}
+//func (sj *sj) aasa(t *testing.T, value string) {
+//	for {
+//		select {
+//		case <-sj.a52:
+//			Dprint("1")
+//			return
+//		default:
+//			Dprint("111")
+//		}
+//	}
+//}
+//func Dprint(a12 string) {
+//	fmt.Printf(a12)
+//}
