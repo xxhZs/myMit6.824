@@ -84,6 +84,7 @@ func (kv *ShardKV) Get(args *GetArgs, reply *GetReply) {
 		return
 	}
 	//是leader，所以需要进行请求处理,判断是不是重复请求
+	//DPrintf("lock1", kv.gid, kv.me)
 	kv.mu.Lock()
 	lastReply, ok := kv.lastReply[args.ShareId][args.ClientId]
 	if ok && lastReply > args.RequestId {
@@ -94,7 +95,7 @@ func (kv *ShardKV) Get(args *GetArgs, reply *GetReply) {
 		return
 	}
 	kv.mu.Unlock()
-	//从raft进行操作
+	//从raft进行操作f
 	isok, appliOp := kv.getCh(command)
 	if !isok {
 		reply.Err = ErrWrongLeader
@@ -249,8 +250,8 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister,
 	}
 
 	go kv.waitCommit()
-	go kv.daemon(kv.pullCfg, 100)
-	go kv.daemon(kv.pullShard, 100)
+	go kv.daemon(kv.pullCfg, 50)
+	go kv.daemon(kv.pullShard, 50)
 	go kv.daemon(kv.pushGC, 100)
 	go kv.snapshotMonitor()
 	go kv.daemon(kv.checkLeaderNewestLog, 100)
@@ -309,23 +310,25 @@ func (kv *ShardKV) isAllPull() bool {
 	return ready
 }
 func (kv *ShardKV) updateCfg(newCfg shardmaster.Config) CommandResponse {
-	kv.mu.Lock()
-	defer kv.mu.Unlock()
 	DPrintf("修改cfg 序号为%v , %v", kv.gid, kv.me, kv.cfg.Num, newCfg)
+	kv.mu.Lock()
 	if newCfg.Num != kv.cfg.Num+1 {
 		DPrintf("不进行同步cfg", kv.gid, kv.me)
+		kv.mu.Unlock()
 		return CommandResponse{"ErrOutDated"}
 	}
+	kv.mu.Unlock()
 	//更新
 	for shard, gid := range newCfg.Shards {
-		_, ok := kv.shardManger[shard]
-		if ok && gid != kv.gid {
+		kv.mu.Lock()
+		//gid := kv.lastCfg.Shards[shard]
+		if _, ok := kv.shardManger[shard]; ok && gid != kv.gid {
 			//有，但是gid和本地集群不同，说明这个块不应该在本地，那么把他加入到gc中
 			DPrintf("gid与本地不同，这个块不在改集群，加入gc ，shard%v", kv.gid, kv.me, shard)
 			delete(kv.shardManger, shard)
 			kv.gcManager[shard] = true
 		}
-		if !ok && gid == kv.gid {
+		if _, ok := kv.shardManger[shard]; !ok && gid == kv.gid {
 			//没有，但是gid相同,要么是第一次，要么要pull
 			DPrintf("进行更改，shard%v", kv.gid, kv.me, shard)
 			if kv.cfg.Num == 0 {
@@ -341,12 +344,14 @@ func (kv *ShardKV) updateCfg(newCfg shardmaster.Config) CommandResponse {
 			}
 			DPrintf("更改完成，shard%v shardManger %v", kv.gid, kv.me, shard, kv.shardManger)
 			delete(kv.gcManager, shard)
-
 		}
+		kv.mu.Unlock()
 	}
 	DPrintf("更新cfg，cfg的序号%v", kv.gid, kv.me, newCfg.Num)
+	kv.mu.Lock()
 	kv.lastCfg = kv.cfg
 	kv.cfg = newCfg
+	kv.mu.Unlock()
 	return CommandResponse{"OK"}
 }
 
@@ -368,6 +373,7 @@ func (kv *ShardKV) waitCommit() {
 			kv.mu.Lock()
 			//提交的index
 			kv.applyRaftLogIndex = msg.CommandIndex
+			DPrintf("kv.applyRaftLogIndex %v", kv.gid, kv.me, kv.applyRaftLogIndex)
 			kv.mu.Unlock()
 			if op.OpType == "PullMsg" {
 				DPrintf("收到pullmsg %v", kv.gid, kv.me, op)
@@ -422,9 +428,9 @@ func (kv *ShardKV) waitCommit() {
 				opCh = make(chan Op, 1)
 				kv.chMap[msg.CommandIndex] = opCh
 			}
+			kv.mu.Unlock()
 			DPrintf("opCh", kv.gid, kv.me)
 			opCh <- op
-			kv.mu.Unlock()
 		}
 	}
 }
@@ -435,30 +441,35 @@ func (kv *ShardKV) waitCommit() {
 */
 func (kv *ShardKV) GetPull(args *ConfigMsgArgs, reply *ConfigMsgReply) {
 	kv.mu.Lock()
-	defer kv.mu.Unlock()
 	DPrintf("收到pull shard命令", kv.gid, kv.me)
 	reply.Shards = args.Shards
 	reply.ConfigNum = kv.cfg.Num
-
+	kv.mu.Unlock()
 	_, isLeader := kv.rf.GetState()
 	if !isLeader {
 		DPrintf("我不是leader", kv.gid, kv.me)
 		reply.Err = ErrWrongLeader
 		return
 	}
+	kv.mu.Lock()
 	if args.ConfigNum > kv.cfg.Num {
 		DPrintf("cfg序号已经比我本地的新了", kv.gid, kv.me)
 		reply.Err = ErrRequest
+		kv.mu.Unlock()
 		return
 	}
+	kv.mu.Unlock()
 	reply.DB = make(map[int]map[string]string, len(args.Shards))
 	reply.Cid2Seq = make(map[int]map[int64]int, len(args.Shards))
 	for _, shard := range args.Shards {
+		kv.mu.Lock()
 		if _, ok := kv.db[shard]; !ok {
 			DPrintf("本地没有这个块%v", kv.gid, kv.me, shard)
 			reply.Err = ErrNoKey
+			kv.mu.Unlock()
 			return
 		}
+		kv.mu.Unlock()
 		reply.DB[shard], reply.Cid2Seq[shard] = kv.getDeepCopy(shard, true, ConfigMsgReply{})
 	}
 	DPrintf("pullshard成功，返回结果%v", kv.gid, kv.me, reply)
@@ -468,8 +479,10 @@ func (kv *ShardKV) getDeepCopy(shard int, isKv bool, reply ConfigMsgReply) (map[
 	DPrintf("深度复制", kv.gid, kv.me)
 	ddb := make(map[string]string)
 	replt := make(map[int64]int)
+	kv.mu.Lock()
 	dbKv := kv.db
 	lastReplyKv := kv.lastReply
+	kv.mu.Unlock()
 	if !isKv {
 		dbKv = reply.DB
 		lastReplyKv = reply.Cid2Seq
@@ -487,16 +500,16 @@ func (kv *ShardKV) getDeepCopy(shard int, isKv bool, reply ConfigMsgReply) (map[
 发送pull的方法
 */
 func (kv *ShardKV) pullShard() {
-	kv.mu.Lock()
 	DPrintf("pull块", kv.gid, kv.me)
 	GidShard := kv.getGidShards()
 	for gid, shard := range GidShard {
 		go kv.requestShardData(gid, shard)
 	}
-	kv.mu.Unlock()
 }
 func (kv *ShardKV) getGidShards() map[int][]int {
 	GidShard := make(map[int][]int)
+	kv.mu.Lock()
+	defer kv.mu.Unlock()
 	DPrintf("得到gid对应的shard,cfg%v , lastcfg%v,shardManger%v", kv.gid, kv.me, kv.cfg, kv.lastCfg, kv.shardManger)
 	for key, value := range kv.shardManger {
 		if value == "NeedPull" {
@@ -514,13 +527,16 @@ func (kv *ShardKV) getGidShards() map[int][]int {
 func (kv *ShardKV) requestShardData(gid int, shardIds []int) {
 	//获取shardid相关group
 	DPrintf("发送pullshard", kv.gid, kv.me)
+	kv.mu.Lock()
 	group := kv.lastCfg.Groups[gid]
 	args := ConfigMsgArgs{
 		Shards:    shardIds,
 		ConfigNum: kv.cfg.Num,
 	}
+	kv.mu.Unlock()
 	DPrintf("group %v", kv.gid, kv.me, group)
 	for _, value := range group {
+		DPrintf("发送pullshard -->%v", kv.gid, kv.me, value)
 		srv := kv.make_end(value)
 		var Reply ConfigMsgReply
 		DPrintf("发送pullshard -->%v，arg%v", kv.gid, kv.me, value, args)
@@ -558,26 +574,32 @@ func (kv *ShardKV) requestShardData(gid int, shardIds []int) {
 
 func (kv *ShardKV) updateShare(reply ConfigMsgReply) CommandResponse {
 	kv.mu.Lock()
-	defer kv.mu.Unlock()
 	//判断是否过期
 	DPrintf("修改share", kv.gid, kv.me)
 	if reply.ConfigNum < kv.cfg.Num {
+		kv.mu.Unlock()
 		return CommandResponse{ErrWrongGroup}
 	}
+	kv.mu.Unlock()
 	for _, shardId := range reply.Shards {
+		kv.mu.Lock()
 		if status, ok := kv.shardManger[shardId]; !ok {
 			DPrintf("shardManger中没有这个 %v", kv.gid, kv.me, shardId)
+			kv.mu.Unlock()
 			break
 		} else if status != "NeedPull" {
 			DPrintf("shardManger中这个状态不对%v %v", kv.gid, kv.me, shardId, status)
+			kv.mu.Unlock()
 			break
 		}
-
+		kv.mu.Unlock()
 		db, replt := kv.getDeepCopy(shardId, false, reply)
+		kv.mu.Lock()
 		kv.db[shardId] = db
 		kv.lastReply[shardId] = replt
 		DPrintf("last %v", kv.gid, kv.me, kv.lastReply)
 		kv.shardManger[shardId] = "CanUse"
+		kv.mu.Unlock()
 		DPrintf("更新shard成功 shardId%v cfg%v db%v ", kv.gid, kv.me, shardId, kv.cfg, kv.db)
 	}
 	return CommandResponse{OK}
@@ -659,9 +681,9 @@ func (kv *ShardKV) QueryGc(shard []int, num int, group []string) {
 
 // 集群处理来的gc通知
 func (kv *ShardKV) RequestGc(args *ConfigMsgArgs, reply *ConfigMsgReply) {
+	_, isLeader := kv.rf.GetState()
 	kv.mu.Lock()
 	defer kv.mu.Unlock()
-	_, isLeader := kv.rf.GetState()
 	DPrintf("响应Gc", kv.gid, kv.me)
 	reply.ConfigNum = kv.cfg.Num
 	reply.Shards = args.Shards
