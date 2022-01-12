@@ -254,7 +254,7 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister,
 	// kv.mck = shardmaster.MakeClerk(kv.masters)
 
 	kv.applyCh = make(chan raft.ApplyMsg)
-	kv.rf = raft.Make(servers, me, persister, kv.applyCh)
+	kv.rf = raft.Make(servers, me, persister, kv.applyCh, kv.gid)
 	kv.killCh = make(chan int)
 
 	kv.Persister = persister
@@ -263,9 +263,9 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister,
 	go kv.waitCommit()
 	go kv.daemon(kv.pullCfg, 150)
 	go kv.daemon(kv.pullShard, 80)
-	go kv.daemon(kv.pushGC, 50)
+	go kv.daemon(kv.pushGC, 80)
 	go kv.snapshotMonitor()
-	go kv.daemon(kv.checkLeaderNewestLog, 200)
+	go kv.daemon(kv.checkLeaderNewestLog, 300)
 	return kv
 }
 
@@ -561,20 +561,18 @@ func (kv *ShardKV) requestShardData(gid int, shardIds []int, gidLeader int) {
 				kv.mu.Unlock()
 				return
 			}
-			kv.mu.Unlock()
 			for _, shardIds := range Reply.Shards {
-				//kv.mu.Lock()
 				if status, ok := kv.shardManger[shardIds]; !ok {
 					DPrintf("shardManger中没有这个 %v", kv.gid, kv.me, shardIds)
-					//kv.mu.Unlock()
+					kv.mu.Unlock()
 					return
 				} else if status != "NeedPull" {
 					DPrintf("shardManger中这个状态不对%v %v", kv.gid, kv.me, shardIds, status)
-					//kv.mu.Unlock()
+					kv.mu.Unlock()
 					return
 				}
-				//kv.mu.Unlock()
 			}
+			kv.mu.Unlock()
 			DPrintf("raft", kv.gid, kv.me, shardIds)
 			kv.rf.Start(Op{
 				ArgsNums: args.ConfigNum,
@@ -774,9 +772,9 @@ func (kv *ShardKV) takeSnapshot() {
 	e.Encode(kv.db)
 	e.Encode(kv.lastReply)
 	e.Encode(kv.shardManger)
-	//e.Encode(kv.gcManager)
 	e.Encode(kv.cfg)
 	e.Encode(kv.lastCfg)
+	e.Encode(kv.gcManager)
 	applyRaftLogIndex := kv.applyRaftLogIndex
 	kv.mu.Unlock()
 	//同步到raft层
@@ -796,22 +794,23 @@ func (kv *ShardKV) installSnapshot(snapshot []byte) {
 		var db map[int]map[string]string
 		var lastReply map[int]map[int64]int
 		var shardManger map[int]string
+		var gcManger map[int]bool
 		var cfg, lastCfg shardmaster.Config
 		if d.Decode(&db) != nil ||
 			d.Decode(&lastReply) != nil ||
 			d.Decode(&shardManger) != nil ||
 			d.Decode(&cfg) != nil ||
-			d.Decode(&lastCfg) != nil {
+			d.Decode(&lastCfg) != nil || d.Decode(&gcManger) != nil {
 			DPrintf("错误快照保存", kv.gid, kv.me)
 			return
 		}
 		kv.mu.Lock()
-
 		kv.db = db
 		kv.lastReply = lastReply
 		kv.shardManger = shardManger
 		kv.cfg = cfg
 		kv.lastCfg = lastCfg
+		kv.gcManager = gcManger
 		kv.mu.Unlock()
 		DPrintf("快照db，lastReply，shardManger，cfg，lastCfg", kv.gid, kv.me, db, lastReply, shardManger, cfg, lastCfg)
 	}

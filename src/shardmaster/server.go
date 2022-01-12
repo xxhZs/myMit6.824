@@ -80,6 +80,7 @@ func (sm *ShardMaster) Query(args *QueryArgs, reply *QueryReply) {
 	// Your code here.
 	DPrintf("query加入%v", sm.me, args)
 	if !sm.isLeader() {
+		DPrintf("query不是leader%v", sm.me)
 		reply.WrongLeader = true
 		return
 	}
@@ -90,6 +91,7 @@ func (sm *ShardMaster) Query(args *QueryArgs, reply *QueryReply) {
 		DPrintf("query来过了", sm.me, args)
 		reply.Config = sm.configs[args.Num]
 		reply.Err = OK
+		sm.mu.Unlock()
 		return
 	}
 	sm.mu.Unlock()
@@ -176,7 +178,7 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister)
 	labgob.Register(MoveArgs{})
 	labgob.Register(QueryArgs{})
 	sm.applyCh = make(chan raft.ApplyMsg)
-	sm.rf = raft.Make(servers, me, persister, sm.applyCh)
+	sm.rf = raft.Make(servers, me, persister, sm.applyCh, -1)
 
 	sm.chMap = make(map[int]chan Op)
 	sm.lastReply = make(map[int64]int)
@@ -198,6 +200,9 @@ func (sm *ShardMaster) waitCommit() {
 			DPrintf("收到op %v", sm.me, op)
 			requedtId, ok := sm.lastReply[op.Cid]
 			DPrintf("%v,%v", sm.me, requedtId, ok)
+			if !ok || op.RequestID > requedtId {
+				sm.lastReply[op.Cid] = op.RequestID
+			}
 			sm.mu.Unlock()
 			if (!ok || op.RequestID > requedtId) && op.OpType != "Query" {
 				DPrintf("更改config", sm.me)
