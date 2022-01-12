@@ -89,6 +89,7 @@ type Raft struct {
 	SnaplastTerm  int
 
 	IsSendSnap []bool
+	killCh     chan int
 }
 
 //快照需要的辅助反法
@@ -131,7 +132,7 @@ func (rf *Raft) GetState() (int, bool) {
 	defer rf.mu.Unlock()
 	term = rf.currentTetm
 	isleader = rf.State == "Leader"
-	//DPrintf(123,123,rf.State,rf.currentTetm,"获取当前的状态，当前的任期：%v状态：%v id %v", term, rf.State, rf.me)
+	DPrintf(123, 123, rf.State, rf.currentTetm, "获取当前的状态，当前的任期：%v状态：%v id %v", term, rf.State)
 	return term, isleader
 }
 
@@ -397,11 +398,11 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 //
 func (rf *Raft) Kill() {
 	atomic.StoreInt32(&rf.dead, 1)
+	close(rf.killCh)
 	rf.heaterTimer.Stop()
 	rf.electionTimer.Stop()
 	// Your code here, if desired.
 }
-
 func (rf *Raft) killed() bool {
 	z := atomic.LoadInt32(&rf.dead)
 	return z == 1
@@ -447,12 +448,15 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	//初始化快照
 	rf.SnaplastIndex = 0
 	rf.SnaplastTerm = -1
+
+	rf.killCh = make(chan int)
+
 	//此处进行超时等待调用 2
 	if rf.heaterTimer != nil {
 		rf.heaterTimer.Stop()
 	}
-	rf.heaterTimer = time.NewTimer(rf.getTimeOut())
-	rf.electionTimer = time.NewTimer(HeartbeatInterval)
+	rf.heaterTimer = time.NewTimer(HeartbeatInterval)
+	rf.electionTimer = time.NewTimer(rf.getTimeOut())
 	go rf.selectTimer()
 
 	// initialize from state persisted before a crash
@@ -563,6 +567,8 @@ var HeartbeatInterval time.Duration = time.Millisecond * time.Duration(50)
 func (rf *Raft) selectTimer() {
 	for {
 		select {
+		case <-rf.killCh:
+			return
 		case <-rf.electionTimer.C:
 			rf.mu.Lock()
 			if rf.State == "Follower" {
@@ -613,9 +619,9 @@ func (rf *Raft) sendInstallSnapshot(serverNum int) {
 	}
 	go func(server int, args InstallSnapshot) {
 		var reply RequestVoteReply
-		rf.mu.Lock()
-		DPrintf(len(rf.log), rf.me, rf.State, rf.currentTetm, "发送快照 %v ---> %v , %v", rf.me, server, args)
-		rf.mu.Unlock()
+		//rf.mu.Lock()
+		//DPrintf(len(rf.log), rf.me, rf.State, rf.currentTetm, "发送快照 %v ---> %v , %v", rf.me, server, args)
+		//rf.mu.Unlock()
 		flag := rf.sendInstall(server, args, &reply)
 		if !flag {
 			return
@@ -623,9 +629,6 @@ func (rf *Raft) sendInstallSnapshot(serverNum int) {
 		rf.mu.Lock()
 		defer rf.mu.Unlock()
 		DPrintf(len(rf.log), rf.me, rf.State, rf.currentTetm, "发送快照 %v ---> %v , %v", rf.me, server, args)
-		//if rf.currentTetm != args.Term{
-		//	return
-		//}
 		if reply.Term != rf.currentTetm {
 			return
 		}

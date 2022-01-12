@@ -12,10 +12,10 @@ import "math/big"
 type Clerk struct {
 	servers []*labrpc.ClientEnd
 	// Your data here.
-	lastLeader int
-	ClientId   int64
-	RequestId  int
-	leaderID   int
+	//lastLeader int
+	ClientId  int64
+	RequestId int
+	leaderID  int
 }
 
 func nrand() int64 {
@@ -30,7 +30,7 @@ func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 	ck.servers = servers
 	// Your code here.
 	ck.RequestId = 0
-	ck.lastLeader = 0
+	//ck.lastLeader = 0
 	ck.ClientId = nrand()
 	return ck
 }
@@ -55,7 +55,7 @@ func (ck *Clerk) Query(num int) Config {
 			}
 			leaderId = (leaderId + 1) % len(ck.servers)
 		}
-		ck.lastLeader = (ck.lastLeader + 1) % len(ck.servers)
+		//ck.lastLeader = (ck.lastLeader + 1) % len(ck.servers)
 		ck.RequestId = requestId
 		time.Sleep(100 * time.Millisecond)
 	}
@@ -81,7 +81,7 @@ func (ck *Clerk) Join(servers map[int][]string) {
 			}
 			leaderId = (leaderId + 1) % len(ck.servers)
 		}
-		ck.lastLeader = (ck.lastLeader + 1) % len(ck.servers)
+		//ck.lastLeader = (ck.lastLeader + 1) % len(ck.servers)
 		time.Sleep(100 * time.Millisecond)
 	}
 }
@@ -106,7 +106,7 @@ func (ck *Clerk) Leave(gids []int) {
 			}
 			leaderId = (leaderId + 1) % len(ck.servers)
 		}
-		ck.lastLeader = (ck.lastLeader + 1) % len(ck.servers)
+		//ck.lastLeader = (ck.lastLeader + 1) % len(ck.servers)
 		time.Sleep(100 * time.Millisecond)
 	}
 }
@@ -132,7 +132,7 @@ func (ck *Clerk) Move(shard int, gid int) {
 			}
 			leaderId = (leaderId + 1) % len(ck.servers)
 		}
-		ck.lastLeader = (ck.lastLeader + 1) % len(ck.servers)
+		//ck.lastLeader = (ck.lastLeader + 1) % len(ck.servers)
 		time.Sleep(100 * time.Millisecond)
 	}
 }

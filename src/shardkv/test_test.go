@@ -1,9 +1,7 @@
 package shardkv
 
 import (
-	"6.824lab/labgob"
 	"6.824lab/porcupine"
-	"bytes"
 )
 import "6.824lab/models"
 import "testing"
@@ -955,58 +953,47 @@ type Sj struct {
 	ccc map[int]int
 }
 
-func TestChall(t *testing.T) {
-	take(t)
-}
-func take(t *testing.T) {
-	w := new(bytes.Buffer)
-	e := labgob.NewEncoder(w)
-	sj := Sj{
-		aaa: make(map[int]int),
-		bbb: "1",
-		ccc: make(map[int]int),
-	}
-	sj.aaa[3] = 3
-	fmt.Printf("sj1%v \n", sj)
-	e.Encode(sj.aaa)
-	e.Encode(sj.bbb)
-	e.Encode(sj.ccc)
-
-	sj1 := Sj{
-		aaa: make(map[int]int),
-		bbb: "1",
-		ccc: make(map[int]int),
-	}
-	sj1.aaa[1] = 1
-	sj1.ccc[2] = 2
-	fmt.Printf("sj1原来%v \n", sj1)
-	r := bytes.NewBuffer(w.Bytes())
-	d := labgob.NewDecoder(r)
-	var aaa, ccc map[int]int
-	var bbb string
-	if d.Decode(aaa) != nil ||
-		d.Decode(bbb) != nil ||
-		d.Decode(ccc) != nil {
-		fmt.Printf("ajsfhsakj \n")
-	} else {
-		sj1.aaa = aaa
-		sj1.bbb = bbb
-		sj1.ccc = ccc
-	}
-	fmt.Printf("sj%v \n", sj1)
-}
-
 //func TestChall(t *testing.T) {
-//	sj := sj{a52: make(chan int)}
-//	go sj.aasa(t, "")
-//	go sj.aasa(t, "")
-//	go sj.aasa(t, "")
-//	go sj.aasa(t, "")
-//	time.Sleep(10 * time.Millisecond)
-//	close(sj.a52)
-//	Dprint("555")
-//	time.Sleep(10000 * time.Millisecond)
+//	take(t)
 //}
+//func take(t *testing.T) {
+//	w := new(bytes.Buffer)
+//	e := labgob.NewEncoder(w)
+//	sj := Sj{
+//		aaa: make(map[int]int),
+//		bbb: "1",
+//		ccc: make(map[int]int),
+//	}
+//	sj.aaa[3] = 3
+//	fmt.Printf("sj1%v \n", sj)
+//	e.Encode(sj.aaa)
+//	e.Encode(sj.bbb)
+//	e.Encode(sj.ccc)
+//
+//	sj1 := Sj{
+//		aaa: make(map[int]int),
+//		bbb: "1",
+//		ccc: make(map[int]int),
+//	}
+//	sj1.aaa[1] = 1
+//	sj1.ccc[2] = 2
+//	fmt.Printf("sj1原来%v \n", sj1)
+//	r := bytes.NewBuffer(w.Bytes())
+//	d := labgob.NewDecoder(r)
+//	var aaa, ccc map[int]int
+//	var bbb string
+//	if d.Decode(aaa) != nil ||
+//		d.Decode(bbb) != nil ||
+//		d.Decode(ccc) != nil {
+//		fmt.Printf("ajsfhsakj \n")
+//	} else {
+//		sj1.aaa = aaa
+//		sj1.bbb = bbb
+//		sj1.ccc = ccc
+//	}
+//	fmt.Printf("sj%v \n", sj1)
+//}
+
 //func (sj *sj) aasa(t *testing.T, value string) {
 //	for {
 //		select {
@@ -1021,3 +1008,34 @@ func take(t *testing.T) {
 //func Dprint(a12 string) {
 //	fmt.Printf(a12)
 //}
+
+var electionTimer *time.Timer
+var heaterTimer *time.Timer
+var killch chan int
+
+func TestChall(t *testing.T) {
+	electionTimer = time.NewTimer(100)
+	heaterTimer = time.NewTimer(50)
+	killch = make(chan int)
+	go selectTimer()
+	time.Sleep(1000)
+	//electionTimer.Stop()
+	//heaterTimer.Stop()
+	close(killch)
+	fmt.Printf("over")
+	time.Sleep(1000000)
+}
+func selectTimer() {
+	for {
+		select {
+		case <-killch:
+			return
+		case <-electionTimer.C:
+			fmt.Printf("111")
+			electionTimer.Reset(100)
+		case <-heaterTimer.C:
+			fmt.Printf("222")
+			heaterTimer.Reset(50)
+		}
+	}
+}

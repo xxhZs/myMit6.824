@@ -4,6 +4,7 @@ import (
 	"6.824lab/raft"
 	"fmt"
 	"math"
+	"sync/atomic"
 	"time"
 )
 import "6.824lab/labrpc"
@@ -26,7 +27,7 @@ type ShardMaster struct {
 	me      int
 	rf      *raft.Raft
 	applyCh chan raft.ApplyMsg
-
+	kill    int32
 	// Your data here.
 
 	configs   []Config // indexed by config num
@@ -141,9 +142,14 @@ func (sm *ShardMaster) isLeader() bool {
 // turn off debug output from this instance.
 //
 func (sm *ShardMaster) Kill() {
+	atomic.StoreInt32(&sm.kill, 1)
 	sm.rf.Kill()
-	sm.killCh <- 1
+	close(sm.killCh)
 	// Your code here, if desired.
+}
+func (sm *ShardMaster) killed() bool {
+	z := atomic.LoadInt32(&sm.kill)
+	return z == 1
 }
 
 // needed by shardkv tester
@@ -203,8 +209,8 @@ func (sm *ShardMaster) waitCommit() {
 				opCh = make(chan Op, 1)
 				sm.chMap[msg.CommandIndex] = opCh
 			}
-			opCh <- op
 			sm.mu.Unlock()
+			opCh <- op
 		}
 	}
 }

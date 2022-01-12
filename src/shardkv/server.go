@@ -6,6 +6,7 @@ import (
 	"6.824lab/shardmaster"
 	"bytes"
 	"fmt"
+	"sync/atomic"
 	"time"
 )
 import "6.824lab/raft"
@@ -21,6 +22,11 @@ func DPrintf(format string, gid int, id int, a ...interface{}) (n int, err error
 	}
 	return
 }
+
+//func (sm *ShardKV) killed() bool {
+//	z := atomic.LoadInt32(&sm.dead)
+//	return z == 1
+//}
 
 type Op struct {
 	// Your definitions here.
@@ -46,7 +52,8 @@ type ShardKV struct {
 	make_end     func(string) *labrpc.ClientEnd
 	gid          int
 	masters      []*labrpc.ClientEnd
-	maxraftstate int // snapshot if log grows this big
+	maxraftstate int   // snapshot if log grows this big
+	dead         int32 // set by Kill()
 
 	// Your definitions here.
 	cfg         shardmaster.Config
@@ -179,10 +186,15 @@ func (kv *ShardKV) isHave(configNum int, shareId int) bool {
 // turn off debug output from this instance.
 //
 func (kv *ShardKV) Kill() {
+	atomic.StoreInt32(&kv.dead, 1)
 	kv.rf.Kill()
 	close(kv.killCh)
 	//close(kv.applyCh)
 	// Your code here, if desired.
+}
+func (kv *ShardKV) killed() bool {
+	z := atomic.LoadInt32(&kv.dead)
+	return z == 1
 }
 
 //
@@ -249,11 +261,11 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister,
 	kv.installSnapshot(kv.Persister.ReadSnapshot())
 
 	go kv.waitCommit()
-	go kv.daemon(kv.pullCfg, 50)
+	go kv.daemon(kv.pullCfg, 150)
 	go kv.daemon(kv.pullShard, 80)
 	go kv.daemon(kv.pushGC, 50)
 	go kv.snapshotMonitor()
-	go kv.daemon(kv.checkLeaderNewestLog, 100)
+	go kv.daemon(kv.checkLeaderNewestLog, 200)
 	return kv
 }
 
@@ -777,8 +789,6 @@ func (kv *ShardKV) takeSnapshot() {
 server层上的快照保存
 */
 func (kv *ShardKV) installSnapshot(snapshot []byte) {
-	kv.mu.Lock()
-	defer kv.mu.Unlock()
 	DPrintf("快照保存", kv.gid, kv.me)
 	if snapshot != nil && len(snapshot) > 0 {
 		r := bytes.NewBuffer(snapshot)
@@ -795,11 +805,14 @@ func (kv *ShardKV) installSnapshot(snapshot []byte) {
 			DPrintf("错误快照保存", kv.gid, kv.me)
 			return
 		}
+		kv.mu.Lock()
+
 		kv.db = db
 		kv.lastReply = lastReply
 		kv.shardManger = shardManger
 		kv.cfg = cfg
 		kv.lastCfg = lastCfg
+		kv.mu.Unlock()
 		DPrintf("快照db，lastReply，shardManger，cfg，lastCfg", kv.gid, kv.me, db, lastReply, shardManger, cfg, lastCfg)
 	}
 }
